@@ -5,7 +5,7 @@ from dataclasses import replace
 from webanno_tsv.webanno_tsv import (
     webanno_tsv_read_file, webanno_tsv_read_string,
     Annotation, Document, Sentence, Token,
-    NO_LABEL_ID
+    NO_LABEL_ID, SENTENCE_PADDING_CHAR
 )
 
 # These are used to override the actual layer names in the test files for brevity
@@ -59,7 +59,7 @@ class WebannoTsvReadRegularFilesTest(unittest.TestCase):
         self.assertEqual(self.TEXT_SENT_2, snd.text)
 
     def test_reads_correct_document_text(self):
-        text = "\n".join((self.TEXT_SENT_1, self.TEXT_SENT_2))
+        text = SENTENCE_PADDING_CHAR.join((self.TEXT_SENT_1, self.TEXT_SENT_2))
         self.assertEqual(text, self.doc.text)
 
     def test_reads_correct_tokens(self):

@@ -23,6 +23,9 @@ RESERVED_STRS = ['\\', '[', ']', '|', '_', '->', ';', '\t', '\n', '*']
 # Mulitiline sentences are split on this character per Webanno Appendix B
 MULTILINE_SPLIT_CHAR = '\f'
 
+# character used to pad text between sentences
+SENTENCE_PADDING_CHAR = '\n'
+
 
 class WebannoTsvDialect(csv.Dialect):
     delimiter = '\t'
@@ -46,6 +49,7 @@ class Token:
 class Sentence:
     idx: int
     text: str
+    tokens: Tuple[Token]
 
 
 @dataclass(frozen=True, eq=False)  # Annotations are compared/hashed base on object identity
@@ -124,7 +128,13 @@ class Document:
 
     @property
     def text(self) -> str:
-        return "\n".join([s.text for s in self.sentences])
+        # we need to use the sentence offsets to reconstruct padding in between them
+        result = ''
+        for sentence in self.sentences:
+            start = sentence.tokens[0].start
+            result += SENTENCE_PADDING_CHAR * (start - len(result))
+            result += sentence.text
+        return result
 
     @classmethod
     def empty(cls, layer_defs=None):
@@ -177,10 +187,11 @@ class Document:
         :param token_strs: The token texts to add.
         :return: A new document with the token strings added.
         """
-        sentence = Sentence(idx=len(self.sentences) + 1, text=' '.join(token_strs))
-
+        text = ' '.join(token_strs)
+        sent_idx = len(self.sentences) + 1
         start = self.tokens[-1].end + 1 if self.tokens else 0
-        tokens = tokens_from_strs(token_strs, sent_idx=sentence.idx, token_start=start)
+        tokens = tokens_from_strs(token_strs, sent_idx=sent_idx, token_start=start)
+        sentence = Sentence(idx=sent_idx, text=text, tokens=tuple(tokens))
 
         return replace(self, sentences=[*self.sentences, sentence], tokens=[*self.tokens, *tokens])
 
@@ -328,7 +339,6 @@ def _tsv_read_lines(lines: List[str], overriding_layer_names: List[Tuple[str, Li
     non_comments = [line for line in lines if not COMMENT_RE.match(line)]
     token_data = [line for line in non_comments if not SUB_TOKEN_RE.match(line)]
     sentence_strs = _filter_sentences(lines)
-    sentences = [Sentence(idx=i + 1, text=text) for i, text in enumerate(sentence_strs)]
 
     if overriding_layer_names:
         layer_defs = overriding_layer_names
@@ -340,14 +350,41 @@ def _tsv_read_lines(lines: List[str], overriding_layer_names: List[Tuple[str, Li
 
     annotations = []
     tokens = []
+    sentences = []
+    sentence_tokens = []
     for row in rows:
         # consume the first three columns of each line
         token = _read_token(row)
         tokens.append(token)
+
+        # if the sentence index changes, we have a new sentence
+        if len(sentence_tokens) > 0 and token.sentence_idx != sentence_tokens[0].sentence_idx:
+            sent_idx = sentence_tokens[0].sentence_idx
+            sentence = Sentence(
+                idx=sent_idx,
+                text=sentence_strs[sent_idx - 1],
+                tokens=tuple(sentence_tokens),
+            )
+            sentences.append(sentence)
+            sentence_tokens = []
+
+        sentence_tokens.append(token)
+
         # Each column after the first three is (part of) a span annotation layer
         for layer, fields in layer_defs:
             for annotation in _read_layer(token, row, layer, fields):
                 annotations = merge_into_annotations(annotations, annotation)
+
+    # add the last sentence
+    if len(sentence_tokens) > 0:
+        sent_idx = sentence_tokens[0].sentence_idx
+        sentence = Sentence(
+            idx=sent_idx,
+            text=sentence_strs[sent_idx - 1],
+            tokens=tuple(sentence_tokens),
+        )
+        sentences.append(sentence)
+
     return Document(layer_defs=layer_defs, sentences=sentences, tokens=tokens, annotations=annotations)
 
 
