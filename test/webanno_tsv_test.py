@@ -5,21 +5,25 @@ from dataclasses import replace
 from webanno_tsv.webanno_tsv import (
     webanno_tsv_read_file, webanno_tsv_read_string,
     Annotation, Document, Sentence, Token,
-    NO_LABEL_ID, SENTENCE_PADDING_CHAR
+    NO_LABEL_ID, SENTENCE_PADDING_CHAR, SPAN_LAYER, RELATION_LAYER
 )
 
 # These are used to override the actual layer names in the test files for brevity
-DEFAULT_LAYERS = [
-    ('l1', ['pos']),
-    ('l2', ['lemma']),
-    ('l3', ['entity_id', 'named_entity'])
-]
+DEFAULT_LAYERS = {
+    SPAN_LAYER: [
+        ('l1', ['pos']),
+        ('l2', ['lemma']),
+        ('l3', ['entity_id', 'named_entity'])
+    ],
+}
 
-ACTUAL_DEFAULT_LAYER_NAMES = [
-    ('de.tudarmstadt.ukp.dkpro.core.api.lexmorph.type.pos.POS', ['PosValue']),
-    ('de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Lemma', ['value']),
-    ('webanno.custom.LetterEntity', ['entity_id', 'value'])
-]
+ACTUAL_DEFAULT_LAYER_NAMES = {
+    SPAN_LAYER: [
+        ('de.tudarmstadt.ukp.dkpro.core.api.lexmorph.type.pos.POS', ['PosValue']),
+        ('de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Lemma', ['value']),
+        ('webanno.custom.LetterEntity', ['entity_id', 'value'])
+    ],
+}
 
 
 def test_file(name):
@@ -112,7 +116,7 @@ class WebannoTsvReadRegularFilesTest(unittest.TestCase):
 
 
 class WebannoTsvReadFileWithFormatV33(unittest.TestCase):
-    LAYERS = [('l1', ['entity_id', 'named_entity']), ('l2', ['tex_layout'])]
+    LAYERS = {SPAN_LAYER: [('l1', ['entity_id', 'named_entity']), ('l2', ['tex_layout'])]}
     TEXT_SENT_1 = 'Braun an Gerhard Dresden, 10.'
     TEXT_SENT_2 = 'März 1832 (Zettel an den Brief geklebt) Die Intelligenzblätter habe ich zurückgehalten und sende ' \
                   + 'nur den Brief.\f' \

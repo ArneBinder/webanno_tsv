@@ -276,12 +276,16 @@ def _escape(text: str) -> str:
 
 def _read_layer_names(lines: List[str]) -> Dict[str, List[Tuple[str, List[str]]]]:
 
+    result = {}
     span_matches = [SPAN_LAYER_DEF_RE.match(line) for line in lines]
+    span_layers = [(m.group(1), m.group(2).split('|')) for m in span_matches if m]
+    if len(span_layers) > 0:
+        result[SPAN_LAYER] = span_layers
     relation_matches = [RELATION_LAYER_DEF_RE.match(line) for line in lines]
-    return {
-        SPAN_LAYER: [(m.group(1), m.group(2).split('|')) for m in span_matches if m],
-        RELATION_LAYER: [(m.group(1), m.group(2).split('|')) for m in relation_matches if m],
-    }
+    relation_layers = [(m.group(1), m.group(2).split('|')) for m in relation_matches if m]
+    if len(relation_layers) > 0:
+        result[RELATION_LAYER] = relation_layers
+    return result
 
 
 def _read_token(row: Dict) -> Token:
@@ -489,10 +493,10 @@ def _write_token_fields(token: Token) -> Sequence[str]:
 def _write_line(doc: Document, token: Token) -> str:
     token_fields = _write_token_fields(token)
     layer_fields = []
-    for span_layer, fields in doc.layer_defs[SPAN_LAYER]:
+    for span_layer, fields in doc.layer_defs.get(SPAN_LAYER, []):
         annotations = [a for a in doc.annotations if a.layer == span_layer and token in a.tokens]
         layer_fields += [_write_annotation_field(annotations, field) for field in fields]
-    for relation_layer, fields in doc.layer_defs[RELATION_LAYER]:
+    for relation_layer, fields in doc.layer_defs.get(RELATION_LAYER, []):
         annotations = [a for a in doc.annotations if a.layer == relation_layer and token in a.tokens]
         layer_fields += [_write_annotation_field(annotations, field) for field in fields]
     return '\t'.join([*token_fields, *layer_fields])
@@ -501,15 +505,15 @@ def _write_line(doc: Document, token: Token) -> str:
 def webanno_tsv_write(doc: Document, linebreak='\n') -> str:
     """
     Return a tsv string that represents the given Document.
-    If there are repeated label_ids in the Docuemnt's Annotations, these
+    If there are repeated label_ids in the Document's Annotations, these
     will be corrected. If there are Annotations that are missing a label_id,
     it will be added.
     """
     lines = []
     lines += HEADERS
-    for name, fields in doc.layer_defs[SPAN_LAYER]:
+    for name, fields in doc.layer_defs.get(SPAN_LAYER, []):
         lines.append(_write_span_layer_header(name, fields))
-    for name, fields in doc.layer_defs[RELATION_LAYER]:
+    for name, fields in doc.layer_defs.get(RELATION_LAYER, []):
         lines.append(_write_span_layer_header(name, fields))
     lines.append('')
 
