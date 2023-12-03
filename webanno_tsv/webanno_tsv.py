@@ -114,8 +114,7 @@ class Annotation(abc.ABC):
 
 @dataclass(frozen=True)
 class SpanAnnotation(Annotation):
-    first_token: Token
-    last_token: Token
+    tokens: Tuple[Token, ...]
 
 
 @dataclass(frozen=True)
@@ -155,6 +154,10 @@ class LayerDefinition(abc.ABC):
     ) -> 'Annotation':
         pass
 
+    @abc.abstractmethod
+    def annotation_to_parts(self, annotation: Annotation) -> List[AnnotationPart]:
+        pass
+
 
 @dataclass(frozen=True)
 class SpanLayer(LayerDefinition):
@@ -177,7 +180,13 @@ class SpanLayer(LayerDefinition):
         self, id: str, previous_annotations: Dict['LayerDefinition', List[Annotation]], tokens: List[Token],
         **features
     ) -> 'Annotation':
-        return SpanAnnotation(id=id, first_token=tokens[0], last_token=tokens[-1], features=features)
+        return SpanAnnotation(id=id, tokens=tuple(tokens), features=features)
+
+    def annotation_to_parts(self, annotation: SpanAnnotation) -> List[AnnotationPart]:
+        return [
+            AnnotationPart(tokens=annotation.tokens, layer=self, field=field, label=annotation.features[field])
+            for field in self.fields
+        ]
 
 
 @dataclass(frozen=True)
@@ -240,8 +249,16 @@ class RelationLayer(LayerDefinition):
         source = base_annotations_by_id[source_id]
         target = base_annotations_by_id[target_id]
 
-        value_value = {field: features[field] for field in self.value_fields}
-        return RelationAnnotation(id=id, source=source, target=target, features=value_value)
+        feature_values = {field: features[field] for field in self.value_fields}
+        return RelationAnnotation(id=id, source=source, target=target, features=feature_values)
+
+    def annotation_to_parts(self, annotation: RelationAnnotation) -> List[AnnotationPart]:
+        result = [
+            AnnotationPart(tokens=annotation.target.tokens, layer=self, field=field, label=annotation.features[field])
+            for field in self.value_fields
+        ]
+        # TODO: add source annotation part
+        return result
 
 
 @dataclass(frozen=True, eq=False)
@@ -628,11 +645,11 @@ def _write_token_fields(token: Token) -> Sequence[str]:
     ]
 
 
-def _write_line(doc: Document, token: Token) -> str:
+def _write_line(layers: Sequence[LayerDefinition], annotation_parts: List[AnnotationPart], token: Token) -> str:
     token_fields = _write_token_fields(token)
     layer_fields = []
-    for layer in doc.layers:
-        annotations = [a for a in doc.annotation_parts if a.layer == layer and token in a.tokens]
+    for layer in layers:
+        annotations = [a for a in annotation_parts if a.layer == layer and token in a.tokens]
         layer_fields += [_write_annotation_field(annotations, field) for field in layer.fields]
     return '\t'.join([*token_fields, *layer_fields])
 
@@ -650,11 +667,11 @@ def webanno_tsv_write(doc: Document, linebreak='\n') -> str:
         lines.append(layer.as_header())
     lines.append('')
 
-    doc = replace(doc, annotation_parts=fix_annotation_ids(doc.annotation_parts))
+    annotation_parts = fix_annotation_ids(doc.annotation_parts)
 
     for sentence in doc.sentences:
         lines += _write_sentence_header(sentence.text)
         for token in doc.sentence_tokens(sentence):
-            lines.append(_write_line(doc, token))
+            lines.append(_write_line(layers=doc.layers, annotation_parts=annotation_parts, token=token))
 
     return linebreak.join(lines)
