@@ -4,26 +4,22 @@ from dataclasses import replace
 
 from webanno_tsv.webanno_tsv import (
     webanno_tsv_read_file, webanno_tsv_read_string,
-    Annotation, Document, Sentence, Token,
-    NO_LABEL_ID, SENTENCE_PADDING_CHAR, SPAN_LAYER, RELATION_LAYER
+    AnnotationPart, Document, Sentence, Token,
+    NO_LABEL_ID, SENTENCE_PADDING_CHAR, SpanLayer
 )
 
 # These are used to override the actual layer names in the test files for brevity
-DEFAULT_LAYERS = {
-    SPAN_LAYER: [
-        ('l1', ['pos']),
-        ('l2', ['lemma']),
-        ('l3', ['entity_id', 'named_entity'])
-    ],
-}
+DEFAULT_LAYERS = [
+    SpanLayer('l1', ('pos',)),
+    SpanLayer('l2', ('lemma',)),
+    SpanLayer('l3', ('entity_id', 'named_entity'))
+]
 
-ACTUAL_DEFAULT_LAYER_NAMES = {
-    SPAN_LAYER: [
-        ('de.tudarmstadt.ukp.dkpro.core.api.lexmorph.type.pos.POS', ['PosValue']),
-        ('de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Lemma', ['value']),
-        ('webanno.custom.LetterEntity', ['entity_id', 'value'])
-    ],
-}
+ACTUAL_DEFAULT_LAYER_NAMES = [
+    SpanLayer('de.tudarmstadt.ukp.dkpro.core.api.lexmorph.type.pos.POS', ('PosValue',)),
+    SpanLayer('de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Lemma', ('value',)),
+    SpanLayer('webanno.custom.LetterEntity', ('entity_id', 'value'))
+]
 
 
 def test_file(name):
@@ -116,7 +112,10 @@ class WebannoTsvReadRegularFilesTest(unittest.TestCase):
 
 
 class WebannoTsvReadFileWithFormatV33(unittest.TestCase):
-    LAYERS = {SPAN_LAYER: [('l1', ['entity_id', 'named_entity']), ('l2', ['tex_layout'])]}
+    LAYERS = [
+        SpanLayer('l1', ('entity_id', 'named_entity')),
+        SpanLayer('l2', ('tex_layout',)),
+    ]
     TEXT_SENT_1 = 'Braun an Gerhard Dresden, 10.'
     TEXT_SENT_2 = 'März 1832 (Zettel an den Brief geklebt) Die Intelligenzblätter habe ich zurückgehalten und sende ' \
                   + 'nur den Brief.\f' \
@@ -135,10 +134,10 @@ class WebannoTsvReadFileWithFormatV33(unittest.TestCase):
         self.assertEqual(self.TEXT_SENT_2, self.doc.sentences[1].text)
 
     def test_reads_annotations_correctly(self):
-        self.assertEqual(9, len(self.doc.match_annotations(layer='l1', field='named_entity')))
-        self.assertEqual(1, len(self.doc.match_annotations(layer='l2', field='tex_layout')))
+        self.assertEqual(9, len(self.doc.match_annotations(layer_name='l1', field='named_entity')))
+        self.assertEqual(1, len(self.doc.match_annotations(layer_name='l2', field='tex_layout')))
 
-        annotations = self.doc.match_annotations(layer='l1', field='named_entity')
+        annotations = self.doc.match_annotations(layer_name='l1', field='named_entity')
         spot_checks = [
             (0, 'PERauthor', -1, 'Braun'),
             (3, 'DATEletter', 1, '10 . März 1832'),
@@ -154,7 +153,7 @@ class WebannoTsvReadActualFileHeaders(unittest.TestCase):
 
     def test_headers_from_input_file(self):
         doc = webanno_tsv_read_file(test_file('test_input.tsv'))
-        self.assertEqual(ACTUAL_DEFAULT_LAYER_NAMES, doc.layer_defs)
+        self.assertEqual(ACTUAL_DEFAULT_LAYER_NAMES, doc.layers)
 
 
 class WebannoTsvReadFileWithQuotesTest(unittest.TestCase):
@@ -173,7 +172,7 @@ class WebannoTsvReadFileWithMultiSentenceSpanAnnotation(unittest.TestCase):
     def test_read_multi_sentence_annotation(self):
         self.doc = webanno_tsv_read_file(test_file('test_input_multi_sentence_span.tsv'), DEFAULT_LAYERS)
 
-        annotations = self.doc.match_annotations(layer='l3', field='named_entity')
+        annotations = self.doc.match_annotations(layer_name='l3', field='named_entity')
         self.assertEqual(1, len(annotations))
 
         annotation = annotations[0]
@@ -222,22 +221,22 @@ class WebannoTsvWriteTest(unittest.TestCase):
         doc = Document.from_token_lists([
             ['First', 'sentence', '😊', '.'],
             ['Second', 'sentence', 'escape[t]his;token', '.']
-        ], layer_defs=DEFAULT_LAYERS)
+        ], layers=DEFAULT_LAYERS)
 
         annotations = [
-            Annotation(tokens=doc.tokens[0:1], layer='l1', field='pos', label='pos-val'),
-            Annotation(tokens=doc.tokens[0:1], layer='l2', field='lemma', label='first'),
-            Annotation(tokens=doc.tokens[1:2], layer='l2', field='lemma', label='sentence'),
-            Annotation(tokens=doc.tokens[2:4], layer='l3', field='named_entity', label='smiley-end', label_id=37),
-            Annotation(tokens=doc.tokens[3:4], layer='l3', field='named_entity', label='DOT'),
-            Annotation(tokens=doc.tokens[7:8], layer='l1', field='pos', label='dot'),
-            Annotation(tokens=doc.tokens[5:6], layer='l2', field='lemma', label='sentence'),
-            Annotation(tokens=doc.tokens[7:8], layer='l2', field='lemma', label='.'),
-            Annotation(tokens=doc.tokens[4:5], layer='l3', field='named_entity', label='XYZ'),
-            Annotation(tokens=doc.tokens[6:7], layer='l3', field='named_entity', label='escape|this\\field'),
+            AnnotationPart(tokens=doc.tokens[0:1], layer=doc.get_layer('l1'), field='pos', label='pos-val'),
+            AnnotationPart(tokens=doc.tokens[0:1], layer=doc.get_layer('l2'), field='lemma', label='first'),
+            AnnotationPart(tokens=doc.tokens[1:2], layer=doc.get_layer('l2'), field='lemma', label='sentence'),
+            AnnotationPart(tokens=doc.tokens[2:4], layer=doc.get_layer('l3'), field='named_entity', label='smiley-end', label_id=37),
+            AnnotationPart(tokens=doc.tokens[3:4], layer=doc.get_layer('l3'), field='named_entity', label='DOT'),
+            AnnotationPart(tokens=doc.tokens[7:8], layer=doc.get_layer('l1'), field='pos', label='dot'),
+            AnnotationPart(tokens=doc.tokens[5:6], layer=doc.get_layer('l2'), field='lemma', label='sentence'),
+            AnnotationPart(tokens=doc.tokens[7:8], layer=doc.get_layer('l2'), field='lemma', label='.'),
+            AnnotationPart(tokens=doc.tokens[4:5], layer=doc.get_layer('l3'), field='named_entity', label='XYZ'),
+            AnnotationPart(tokens=doc.tokens[6:7], layer=doc.get_layer('l3'), field='named_entity', label='escape|this\\field'),
         ]
 
-        doc = replace(doc, annotations=annotations)
+        doc = replace(doc, annotation_parts=annotations)
         result = doc.tsv()
 
         expected = [
@@ -262,21 +261,21 @@ class WebannoTsvWriteTest(unittest.TestCase):
         self.assertEqual(expected, result.split('\n'))
 
     def test_label_id_is_added_on_writing(self):
-        doc = Document.from_token_lists([['A', 'B', 'C', 'D']], layer_defs=DEFAULT_LAYERS)
+        doc = Document.from_token_lists([['A', 'B', 'C', 'D']], layers=DEFAULT_LAYERS)
 
-        a_with_id = Annotation(tokens=doc.tokens[1:3], layer='l3', field='named_entity', label='BC', label_id=67)
-        a_without = Annotation(tokens=doc.tokens[2:4], layer='l3', field='named_entity', label='CD')
-        a_single_token = Annotation(tokens=doc.tokens[3:4], layer='l3', field='named_entity', label='D')
-        doc = replace(doc, annotations=[a_with_id, a_without, a_single_token])
+        a_with_id = AnnotationPart(tokens=doc.tokens[1:3], layer=doc.get_layer('l3'), field='named_entity', label='BC', label_id=67)
+        a_without = AnnotationPart(tokens=doc.tokens[2:4], layer=doc.get_layer('l3'), field='named_entity', label='CD')
+        a_single_token = AnnotationPart(tokens=doc.tokens[3:4], layer=doc.get_layer('l3'), field='named_entity', label='D')
+        doc = replace(doc, annotation_parts=[a_with_id, a_without, a_single_token])
 
         doc_new = webanno_tsv_read_string(doc.tsv())
 
         self.assertNotEqual(doc, doc_new)
-        self.assertEqual(3, len(doc_new.annotations))
-        self.assertEqual(67, doc_new.annotations[0].label_id)
-        self.assertEqual(68, doc_new.annotations[1].label_id,
+        self.assertEqual(3, len(doc_new.annotation_parts))
+        self.assertEqual(67, doc_new.annotation_parts[0].label_id)
+        self.assertEqual(68, doc_new.annotation_parts[1].label_id,
                          'Should have added a new label id incremented from last max.')
-        self.assertEqual(NO_LABEL_ID, doc_new.annotations[2].label_id,
+        self.assertEqual(NO_LABEL_ID, doc_new.annotation_parts[2].label_id,
                          'Should not have added a new label id for a single token.')
 
     def test_read_write_equality(self):

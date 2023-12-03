@@ -30,7 +30,7 @@ pip install git+https://github.com/neuged/webanno_tsv
 To construct a Document with annotations you could do:
 
 ```py
-from webanno_tsv import Document, Annotation
+from webanno_tsv import Document, AnnotationPart, SpanLayer
 from dataclasses import replace
 
 sentences = [
@@ -39,12 +39,15 @@ sentences = [
 ]
 doc = Document.from_token_lists(sentences)
 
-layer_defs = [('Layer1', ['Field1']), ('Layer2', ['Field2', 'Field3'])]
-annotations = [
-    Annotation(tokens=doc.tokens[1:2], layer='Layer1', field='Field1', label='ABC'),
-    Annotation(tokens=doc.tokens[1:3], layer='Layer2', field='Field3', label='XYZ', label_id=1)
+layer_defs = [
+    SpanLayer('Layer1', ('Field1',)),
+    SpanLayer('Layer2', ('Field2', 'Field3')),
 ]
-doc = replace(doc, annotations=annotations, layer_defs=layer_defs)
+annotations = [
+    AnnotationPart(tokens=doc.tokens[1:2], layer=layer_defs[0], field='Field1', label='ABC'),
+    AnnotationPart(tokens=doc.tokens[1:3], layer=layer_defs[1], field='Field3', label='XYZ', label_id=1)
+]
+doc = replace(doc, annotation_parts=annotations, layer_defs=layer_defs)
 doc.tsv()
 ```
 
@@ -80,7 +83,7 @@ for token in doc.tokens:
 # 1 2
 # 2 2
 
-for annotation in doc.match_annotations(layer='Layer2'):
+for annotation in doc.match_annotations(layer_name='Layer2'):
     print(annotation.layer, annotation.field, annotation.label)
 
 # Prints:
@@ -96,7 +99,7 @@ for annotation in doc.match_annotations(sentence=doc.sentences[0]):
 # Some lookup functions for convenience are on the Document instance
 doc.token_sentence(token[0])
 doc.sentence_tokens(doc.sentence[0])
-doc.annotation_sentences(doc.annotations[0])
+doc.annotation_sentences(doc.annotation_parts[0])
 ```
 
 __Possible Gotcha__: The classes in this library are read-only dataclasses ([dataclasses with `frozen=True`](https://docs.python.org/3/library/dataclasses.html#dataclasses.dataclass)).

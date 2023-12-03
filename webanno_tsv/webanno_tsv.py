@@ -1,6 +1,7 @@
 import csv
 import itertools
 import re
+from collections import defaultdict
 from dataclasses import dataclass, replace
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -9,10 +10,12 @@ NO_LABEL_ID = -1
 COMMENT_RE = re.compile('^#')
 SPAN_LAYER_DEF_RE = re.compile(r'^#T_SP=([^|]+)\|(.*)$')
 RELATION_LAYER_DEF_RE = re.compile(r'^#T_RL=([^|]+)\|(.*)$')
+RELATION_BASE_LAYER = re.compile(r'^BT_(.+)$')
 SENTENCE_RE = re.compile('^#Text=(.*)')
 FIELD_EMPTY_RE = re.compile('^[_*]')
 FIELD_WITH_ID_RE = re.compile(r'(.*)\[([0-9]*)]$')
 SUB_TOKEN_RE = re.compile(r'[0-9]+-[0-9]+\.[0-9]+')
+RELATION_SOURCE_RE = re.compile(r'^([0-9]+-[0-9]+)(?:\[([0-9]+)_([0-9]+)\])?$')
 
 HEADERS = ['#FORMAT=WebAnno TSV 3.3']
 
@@ -26,9 +29,6 @@ MULTILINE_SPLIT_CHAR = '\f'
 
 # character used to pad text between sentences
 SENTENCE_PADDING_CHAR = '\n'
-
-SPAN_LAYER = 'span'
-RELATION_LAYER = 'relation'
 
 
 class WebannoTsvDialect(csv.Dialect):
@@ -56,10 +56,10 @@ class Sentence:
     tokens: Tuple[Token]
 
 
-@dataclass(frozen=True, eq=False)  # Annotations are compared/hashed base on object identity
-class Annotation:
+@dataclass(frozen=True, eq=False)  # Annotation parts are compared/hashed base on object identity
+class AnnotationPart:
     tokens: Sequence[Token]
-    layer: str
+    layer: 'LayerDefinition'
     field: str
     label: str
     label_id: int = NO_LABEL_ID
@@ -84,15 +84,161 @@ class Annotation:
     def has_label_id(self):
         return self.label_id != NO_LABEL_ID
 
-    def should_merge(self, other: 'Annotation') -> bool:
+    def should_merge(self, other: 'AnnotationPart') -> bool:
         return self.has_label_id and other.has_label_id \
                and self.label_id == other.label_id \
                and self.label == other.label \
                and self.field == other.field \
                and self.layer == other.layer
 
-    def merge(self, *other: 'Annotation') -> 'Annotation':
+    def merge(self, *other: 'AnnotationPart') -> 'AnnotationPart':
         return replace(self, tokens=token_sort(list(self.tokens) + [t for o in other for t in o.tokens]))
+
+    @property
+    def annotation_id(self) -> Optional[str]:
+        if self.label_id == NO_LABEL_ID:
+            if len(self.tokens) != 1:
+                return None
+            else:
+                return f"{self.tokens[0].sentence_idx}-{self.tokens[0].idx}"
+        else:
+            return f"{self.label_id}"
+
+
+@dataclass(frozen=True)
+class Annotation:
+    id: str
+    features: Dict[str, str]
+
+
+@dataclass(frozen=True)
+class SpanAnnotation(Annotation):
+    first_token: Token
+    last_token: Token
+
+
+@dataclass(frozen=True)
+class RelationAnnotation(Annotation):
+    source: SpanAnnotation
+    target: SpanAnnotation
+
+
+@dataclass(frozen=True)
+class LayerDefinition:
+    name: str
+    fields: Tuple[str, ...]
+
+    def as_header(self) -> str:
+        raise NotImplementedError()
+
+    def as_columns(self) -> List[str]:
+        return [f'{self.name}|{field}' for field in self.fields]
+
+    @staticmethod
+    def from_lines(lines: List[str]) -> List['LayerDefinition']:
+        return SpanLayer.from_lines(lines) + RelationLayer.from_lines(lines)
+
+    def read_annotations(self, token: Token, row: Dict) -> List['AnnotationPart']:
+        fields_values = [(field, val) for field in self.fields for val in _read_annotation_field(row, self, field)]
+        fields_labels_ids = [(f, _read_label_and_id(val)) for f, val in fields_values]
+        fields_labels_ids_filtered = [(f, label, lid) for (f, (label, lid)) in fields_labels_ids if label != '']
+
+        return [AnnotationPart(tokens=[token], layer=self, field=field, label=label, label_id=lid) for
+                field, label, lid in fields_labels_ids_filtered]
+
+    def new_annotation(
+        self, id: str, previous_annotations: Dict['LayerDefinition', List[Annotation]], tokens: List[Token],
+        **features
+    ) -> 'Annotation':
+        raise NotImplementedError()
+
+
+@dataclass(frozen=True)
+class SpanLayer(LayerDefinition):
+
+    @staticmethod
+    def from_lines(lines: List[str]) -> List['SpanLayer']:
+        span_matches = [SPAN_LAYER_DEF_RE.match(line) for line in lines]
+        layers = [SpanLayer(name=m.group(1), fields=tuple(m.group(2).split('|'))) for m in span_matches if m]
+        return layers
+
+    def as_header(self) -> str:
+        """
+            Example:
+                ('one', ['x', 'y', 'z']) => '#T_SP=one|x|y|z'
+            """
+        name = self.name + '|' + '|'.join(self.fields)
+        return f'#T_SP={name}'
+
+    def new_annotation(
+        self, id: str, previous_annotations: Dict['LayerDefinition', List[Annotation]], tokens: List[Token],
+        **features
+    ) -> 'Annotation':
+        return SpanAnnotation(id=id, first_token=tokens[0], last_token=tokens[-1], features=features)
+
+
+@dataclass(frozen=True)
+class RelationLayer(LayerDefinition):
+
+    @staticmethod
+    def from_lines(lines: List[str]) -> List['RelationLayer']:
+        relation_matches = [RELATION_LAYER_DEF_RE.match(line) for line in lines]
+        layers = [RelationLayer(name=m.group(1), fields=tuple(m.group(2).split('|'))) for m in relation_matches if m]
+        return layers
+
+    def as_header(self) -> str:
+        """
+            Example:
+                ('one', ['x', 'y', 'z']) => '#T_RL=one|x|y|z'
+            """
+        name = self.name + '|' + '|'.join(self.fields)
+        return f'#T_RL={name}'
+
+    @property
+    def source_field(self) -> str:
+        return self.fields[-1]
+
+    @property
+    def base_name(self) -> str:
+        match = RELATION_BASE_LAYER.match(self.source_field)
+        return match.group(1)
+
+    @property
+    def value_fields(self) -> Tuple[str]:
+        return self.fields[:-1]
+
+    def new_annotation(
+        self, id: str, previous_annotations: Dict['LayerDefinition', List[Annotation]], tokens: List[Token],
+        **features
+    ) -> 'Annotation':
+
+        previous_layers_by_id = {layer.name: layer for layer in previous_annotations.keys()}
+        base_annotations_by_id = {a.id: a for a in previous_annotations[previous_layers_by_id[self.base_name]]}
+
+        # Assume any id and "1-17[1_0]" as example match. This has source token-sentence id (1-17) and (1) and
+        # (0) as target and source disambiguation ids, respectively. The "0" source disambiguation id indicates,
+        # that no disambiguation is used, we will use the source token-sentence id in this case. For the target,
+        # we will use the respective disambiguation id (1). Thus, the final annotation will be: (1-17) -> (1).
+        #
+        # Assume "18-2" as id and "18-3" as example match. The match has source token id (18-3) and implicit target
+        # (0) and source (0) disambiguation ids. We handle the source id as above and use the id of this annotation
+        # as target id because this is the token-sentence id where the annotation is located. Thus, the final
+        # annotation will be: (18-3) -> (18-2).
+
+        source_match = RELATION_SOURCE_RE.match(features[self.source_field])
+
+        source_id = source_match.group(2) or "0"
+        target_id = source_match.group(3) or "0"
+        if source_id == "0":
+            source_id = source_match.group(1)
+        if target_id == "0":
+            target_id = id
+
+        source = base_annotations_by_id[source_id]
+        target = base_annotations_by_id[target_id]
+
+        value_value = {field: features[field] for field in self.value_fields}
+        return RelationAnnotation(id=id, source=source, target=target, features=value_value)
 
 
 @dataclass(frozen=True, eq=False)
@@ -109,14 +255,12 @@ class Document:
 
         1-9	36-43	unhappy	JJ	abstract	negative
 
-    You could invoke Document() with layer_defs=
+    You could invoke Document() with layers=
+         [
+            SpanLayer('l1', ('POS',)),
+            SpanLayer('l2', ('category', 'opinion')),
+         ]
 
-        {
-            'span': [
-                ('l1', ['POS']),
-                ('l2', ['category', 'opinion']),
-            ],
-        }
 
     allowing you to retrieve the annotation for 'abstract' within:
 
@@ -125,14 +269,18 @@ class Document:
     If you want to suppress output of the 'l2' layer when writing the
     document you could do:
 
-        doc = dataclasses.replace(doc, layer_defs={'span': [('l1', ['POS'])]}
+        doc = dataclasses.replace(doc, layers=[SpanLayer('l1', ('POS',))])
         doc.tsv()
     """
-    layer_defs: Dict[str, Sequence[Tuple[str, Sequence[str]]]]
+    layers: Sequence[LayerDefinition]
     sentences: Sequence[Sentence]
     tokens: Sequence[Token]
-    annotations: Sequence[Annotation]
+    annotation_parts: Sequence[AnnotationPart]
+    annotations: Dict[str, Sequence[Annotation]]
     path: str = ''
+
+    def __post_init__(self):
+        object.__setattr__(self, '_layers_by_name', {layer.name: layer for layer in self.layers})
 
     @property
     def text(self) -> str:
@@ -145,14 +293,16 @@ class Document:
         return result
 
     @classmethod
-    def empty(cls, layer_defs=None):
-        if layer_defs is None:
-            layer_defs = []
-        return cls(layer_defs, [], [], [])
+    def empty(cls, layers: Optional[Sequence[LayerDefinition]] = None):
+        if layers is None:
+            layers = []
+        return cls(layers, [], [], [], {})
 
     @classmethod
-    def from_token_lists(cls, token_lists: Sequence[Sequence[str]], layer_defs: Sequence = None) -> 'Document':
-        doc = Document.empty(layer_defs)
+    def from_token_lists(
+        cls, token_lists: Sequence[Sequence[str]], layers: Optional[Sequence[LayerDefinition]] = None
+    ) -> 'Document':
+        doc = Document.empty(layers)
         for tlist in token_lists:
             doc = doc.with_added_token_strs(tlist)
         return doc
@@ -160,13 +310,13 @@ class Document:
     def token_sentence(self, token: Token) -> Sentence:
         return next(s for s in self.sentences if s.idx == token.sentence_idx)
 
-    def annotation_sentences(self, annotation: Annotation) -> List[Sentence]:
+    def annotation_sentences(self, annotation: AnnotationPart) -> List[Sentence]:
         return sorted({self.token_sentence(t) for t in annotation.tokens}, key=lambda s: s.idx)
 
     def sentence_tokens(self, sentence: Sentence) -> List[Token]:
         return [t for t in self.tokens if t.sentence_idx == sentence.idx]
 
-    def match_annotations(self, sentence: Sentence = None, layer='', field='') -> Sequence[Annotation]:
+    def match_annotations(self, sentence: Sentence = None, layer_name: str = '', field='') -> Sequence[AnnotationPart]:
         """
         Filter this document's annotations by the given criteria and return only those
         matching the given sentence, layer and field. Leave a parameter unfilled to
@@ -177,11 +327,11 @@ class Document:
         returns annotations from layer 'l1' regardless of which sentence they are in or
         which field in that layer they have.
         """
-        result = self.annotations
+        result = self.annotation_parts
         if sentence:
             result = [a for a in result if sentence in self.annotation_sentences(a)]
-        if layer:
-            result = [a for a in result if a.layer == layer]
+        if layer_name:
+            result = [a for a in result if a.layer.name == layer_name]
         if field:
             result = [a for a in result if a.field == field]
         return result
@@ -206,6 +356,9 @@ class Document:
     def tsv(self, linebreak='\n'):
         return webanno_tsv_write(self, linebreak)
 
+    def get_layer(self, layer_name: str) -> LayerDefinition:
+        return self._layers_by_name[layer_name]
+
 
 def token_sort(tokens: Iterable[Token]) -> List[Token]:
     """
@@ -217,7 +370,7 @@ def token_sort(tokens: Iterable[Token]) -> List[Token]:
     return sorted(tokens, key=lambda t: (t.sentence_idx * offset) + t.idx)
 
 
-def fix_annotation_ids(annotations: Iterable[Annotation]) -> List[Annotation]:
+def fix_annotation_ids(annotations: Iterable[AnnotationPart]) -> List[AnnotationPart]:
     """
     Setup label ids for the annotations to be consistent in the group.
     After this, there should be no duplicate label id and every multi-token
@@ -249,7 +402,7 @@ def tokens_from_strs(token_strs: Sequence[str], sent_idx=1, token_start=0) -> [T
             enumerate(zip(starts, stops, token_strs))]
 
 
-def merge_into_annotations(annotations: Sequence[Annotation], annotation: Annotation) -> Sequence[Annotation]:
+def merge_into_annotations(annotations: Sequence[AnnotationPart], annotation: AnnotationPart) -> Sequence[AnnotationPart]:
     candidate = next((a for a in annotations if a.should_merge(annotation)), None)
     if candidate:
         merged = candidate.merge(annotation)
@@ -274,20 +427,6 @@ def _escape(text: str) -> str:
     return text
 
 
-def _read_layer_names(lines: List[str]) -> Dict[str, List[Tuple[str, List[str]]]]:
-
-    result = {}
-    span_matches = [SPAN_LAYER_DEF_RE.match(line) for line in lines]
-    span_layers = [(m.group(1), m.group(2).split('|')) for m in span_matches if m]
-    if len(span_layers) > 0:
-        result[SPAN_LAYER] = span_layers
-    relation_matches = [RELATION_LAYER_DEF_RE.match(line) for line in lines]
-    relation_layers = [(m.group(1), m.group(2).split('|')) for m in relation_matches if m]
-    if len(relation_layers) > 0:
-        result[RELATION_LAYER] = relation_layers
-    return result
-
-
 def _read_token(row: Dict) -> Token:
     """
     Construct a Token from the row object using the sentence from doc.
@@ -306,18 +445,9 @@ def _read_token(row: Dict) -> Token:
     return Token(sentence_idx=sent_idx, idx=tok_idx, start=start, end=end, text=text)
 
 
-def _read_annotation_field(row: Dict, layer: str, field: str) -> List[str]:
-    col_name = _annotation_type(layer, field)
+def _read_annotation_field(row: Dict, layer: LayerDefinition, field: str) -> List[str]:
+    col_name = _annotation_type(layer.name, field)
     return row[col_name].split('|') if row[col_name] else []
-
-
-def _read_layer(token: Token, row: Dict, layer: str, fields: List[str]) -> List[Annotation]:
-    fields_values = [(field, val) for field in fields for val in _read_annotation_field(row, layer, field)]
-    fields_labels_ids = [(f, _read_label_and_id(val)) for f, val in fields_values]
-    fields_labels_ids_filtered = [(f, label, lid) for (f, (label, lid)) in fields_labels_ids if label != '']
-
-    return [Annotation(tokens=[token], layer=layer, field=field, label=label, label_id=lid) for
-            field, label, lid in fields_labels_ids_filtered]
 
 
 def _read_label_and_id(field: str) -> Tuple[str, int]:
@@ -352,21 +482,22 @@ def _filter_sentences(lines: List[str]) -> List[str]:
     return [MULTILINE_SPLIT_CHAR.join(group) for group in text_groups]
 
 
-def _tsv_read_lines(lines: List[str], overriding_layer_names: Dict[str, List[Tuple[str, List[str]]]] = None) -> Document:
+def _tsv_read_lines(lines: List[str], overriding_layer_names: Dict[str, Sequence[LayerDefinition]] = None) -> Document:
     non_comments = [line for line in lines if not COMMENT_RE.match(line)]
     token_data = [line for line in non_comments if not SUB_TOKEN_RE.match(line)]
     sentence_strs = _filter_sentences(lines)
 
     if overriding_layer_names:
-        layer_defs = overriding_layer_names
+        layers = overriding_layer_names
     else:
-        layer_defs = _read_layer_names(lines)
+        layers = LayerDefinition.from_lines(lines)
 
-    span_columns = [_annotation_type(layer, field) for layer, fields in layer_defs.get(SPAN_LAYER, []) for field in fields]
-    relation_columns = [_annotation_type(layer, field) for layer, fields in layer_defs.get(RELATION_LAYER, []) for field in fields]
-    rows = csv.DictReader(token_data, dialect=WebannoTsvDialect, fieldnames=TOKEN_FIELDNAMES + span_columns + relation_columns)
+    columns = []
+    for layer in layers:
+        columns += layer.as_columns()
+    rows = csv.DictReader(token_data, dialect=WebannoTsvDialect, fieldnames=TOKEN_FIELDNAMES + columns)
 
-    annotations = []
+    annotation_parts = []
     tokens = []
     sentences = []
     sentence_tokens = []
@@ -389,13 +520,9 @@ def _tsv_read_lines(lines: List[str], overriding_layer_names: Dict[str, List[Tup
         sentence_tokens.append(token)
 
         # Each column after the first three is (part of) a span annotation layer
-        for span_layer, fields in layer_defs.get(SPAN_LAYER, []):
-            for annotation in _read_layer(token, row, span_layer, fields):
-                annotations = merge_into_annotations(annotations, annotation)
-
-        for relation_layer, fields in layer_defs.get(RELATION_LAYER, []):
-            for annotation in _read_layer(token, row, relation_layer, fields):
-                annotations = merge_into_annotations(annotations, annotation)
+        for layer in layers:
+            for annotation in layer.read_annotations(token, row):
+                annotation_parts = merge_into_annotations(annotation_parts, annotation)
 
     # add the last sentence
     if len(sentence_tokens) > 0:
@@ -407,7 +534,24 @@ def _tsv_read_lines(lines: List[str], overriding_layer_names: Dict[str, List[Tup
         )
         sentences.append(sentence)
 
-    return Document(layer_defs=layer_defs, sentences=sentences, tokens=tokens, annotations=annotations)
+    features_per_layer_and_id = defaultdict(lambda: defaultdict(dict))
+    for annotation_part in annotation_parts:
+        features_per_layer_and_id[annotation_part.layer][annotation_part.annotation_id][annotation_part.field] = annotation_part.label
+        features_per_layer_and_id[annotation_part.layer][annotation_part.annotation_id]["tokens"] = annotation_part.tokens
+
+    annotations = defaultdict(list)
+    for layer in layers:
+        for annotation_id, tokens_and_features in features_per_layer_and_id[layer].items():
+            annotation = layer.new_annotation(id=annotation_id, previous_annotations=annotations, **tokens_and_features)
+            annotations[layer].append(annotation)
+
+    return Document(
+        layers=layers,
+        sentences=sentences,
+        tokens=tokens,
+        annotation_parts=annotation_parts,
+        annotations=annotations,
+    )
 
 
 def webanno_tsv_read_string(tsv: str, overriding_layer_def: List[Tuple[str, List[str]]] = None) -> Document:
@@ -417,35 +561,26 @@ def webanno_tsv_read_string(tsv: str, overriding_layer_def: List[Tuple[str, List
     :param tsv: The tsv input to read.
     :param overriding_layer_def: If this is given, use these names
         instead of headers defined in the tsv string to name layers
-        and fields. See Document for an example of layer_defs.
+        and fields. See Document for an example of layers.
     :return: A Document instance of string input
     """
     return _tsv_read_lines(tsv.splitlines(), overriding_layer_def)
 
 
-def webanno_tsv_read_file(path: str, overriding_layer_defs: Dict[str, List[Tuple[str, List[str]]]] = None) -> Document:
+def webanno_tsv_read_file(path: str, overriding_layers: Optional[Sequence[LayerDefinition]] = None) -> Document:
     """
     Read the tsv file at path and return a Document representation.
 
     :param path: Path to read.
-    :param overriding_layer_defs: If this is given, use these names
+    :param overriding_layers: If this is given, use these names
         instead of headers defined in the file to name layers
-        and fields. See Document for an example of layer_defs.
+        and fields. See Document for an example of layers.
     :return: A Document instance of the file at path.
     """
     with open(path, mode='r', encoding='utf-8') as f:
         lines = f.readlines()
-    doc = _tsv_read_lines(lines, overriding_layer_defs)
+    doc = _tsv_read_lines(lines, overriding_layers)
     return replace(doc, path=path)
-
-
-def _write_span_layer_header(layer_name: str, layer_fields: Sequence[str]) -> str:
-    """
-    Example:
-        ('one', ['x', 'y', 'z']) => '#T_SP=one|x|y|z'
-    """
-    name = layer_name + '|' + '|'.join(layer_fields)
-    return f'#T_SP={name}'
 
 
 def _write_label(label: Optional[str]):
@@ -460,7 +595,7 @@ def _write_label_and_id(label: Optional[str], label_id: int) -> str:
     return _write_label(label) + _write_label_id(label_id)
 
 
-def _write_annotation_field(annotations_in_layer: Iterable[Annotation], field: str) -> str:
+def _write_annotation_field(annotations_in_layer: Iterable[AnnotationPart], field: str) -> str:
     if not annotations_in_layer:
         return '_'
 
@@ -493,12 +628,9 @@ def _write_token_fields(token: Token) -> Sequence[str]:
 def _write_line(doc: Document, token: Token) -> str:
     token_fields = _write_token_fields(token)
     layer_fields = []
-    for span_layer, fields in doc.layer_defs.get(SPAN_LAYER, []):
-        annotations = [a for a in doc.annotations if a.layer == span_layer and token in a.tokens]
-        layer_fields += [_write_annotation_field(annotations, field) for field in fields]
-    for relation_layer, fields in doc.layer_defs.get(RELATION_LAYER, []):
-        annotations = [a for a in doc.annotations if a.layer == relation_layer and token in a.tokens]
-        layer_fields += [_write_annotation_field(annotations, field) for field in fields]
+    for layer in doc.layers:
+        annotations = [a for a in doc.annotation_parts if a.layer == layer and token in a.tokens]
+        layer_fields += [_write_annotation_field(annotations, field) for field in layer.fields]
     return '\t'.join([*token_fields, *layer_fields])
 
 
@@ -511,13 +643,11 @@ def webanno_tsv_write(doc: Document, linebreak='\n') -> str:
     """
     lines = []
     lines += HEADERS
-    for name, fields in doc.layer_defs.get(SPAN_LAYER, []):
-        lines.append(_write_span_layer_header(name, fields))
-    for name, fields in doc.layer_defs.get(RELATION_LAYER, []):
-        lines.append(_write_span_layer_header(name, fields))
+    for layer in doc.layers:
+        lines.append(layer.as_header())
     lines.append('')
 
-    doc = replace(doc, annotations=fix_annotation_ids(doc.annotations))
+    doc = replace(doc, annotation_parts=fix_annotation_ids(doc.annotation_parts))
 
     for sentence in doc.sentences:
         lines += _write_sentence_header(sentence.text)

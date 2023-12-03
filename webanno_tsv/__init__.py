@@ -2,7 +2,11 @@
 from .webanno_tsv import (
     Token,
     Sentence,
-    Annotation,
+    AnnotationPart,
+    SpanAnnotation,
+    RelationAnnotation,
+    SpanLayer,
+    RelationLayer,
     Document,
 
     NO_LABEL_ID,
