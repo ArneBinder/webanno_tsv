@@ -1,3 +1,4 @@
+import abc
 import csv
 import itertools
 import re
@@ -106,7 +107,7 @@ class AnnotationPart:
 
 
 @dataclass(frozen=True)
-class Annotation:
+class Annotation(abc.ABC):
     id: str
     features: Dict[str, str]
 
@@ -124,12 +125,13 @@ class RelationAnnotation(Annotation):
 
 
 @dataclass(frozen=True)
-class LayerDefinition:
+class LayerDefinition(abc.ABC):
     name: str
     fields: Tuple[str, ...]
 
+    @abc.abstractmethod
     def as_header(self) -> str:
-        raise NotImplementedError()
+        pass
 
     def as_columns(self) -> List[str]:
         return [f'{self.name}|{field}' for field in self.fields]
@@ -146,11 +148,12 @@ class LayerDefinition:
         return [AnnotationPart(tokens=[token], layer=self, field=field, label=label, label_id=lid) for
                 field, label, lid in fields_labels_ids_filtered]
 
+    @abc.abstractmethod
     def new_annotation(
         self, id: str, previous_annotations: Dict['LayerDefinition', List[Annotation]], tokens: List[Token],
         **features
     ) -> 'Annotation':
-        raise NotImplementedError()
+        pass
 
 
 @dataclass(frozen=True)
