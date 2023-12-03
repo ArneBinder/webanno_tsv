@@ -263,10 +263,12 @@ class RelationLayer(LayerDefinition):
         return RelationAnnotation(id=id, source=source, target=target, features=feature_values)
 
     def annotation_to_parts(self, annotation: RelationAnnotation) -> List[AnnotationPart]:
+        # annotate only the first token
+        tokens = annotation.target.tokens[:1]
         label_id = int(annotation.id if "-" not in annotation.id else NO_LABEL_ID)
         result = [
             AnnotationPart(
-                tokens=annotation.target.tokens,
+                tokens=tokens,
                 layer=self,
                 field=field,
                 label=annotation.features[field],
@@ -283,7 +285,7 @@ class RelationLayer(LayerDefinition):
             source += f"[{source_id}_{target_id}]"
 
         source_annotation_part = AnnotationPart(
-            tokens=annotation.source.tokens, layer=self, field=self.source_field, label=source, label_id=label_id
+            tokens=tokens, layer=self, field=self.source_field, label=source, label_id=label_id
         )
         result.append(source_annotation_part)
         return result
