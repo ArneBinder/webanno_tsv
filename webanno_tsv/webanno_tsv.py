@@ -189,8 +189,11 @@ class SpanLayer(LayerDefinition):
         return SpanAnnotation(id=id, tokens=tokens, features=features)
 
     def annotation_to_parts(self, annotation: SpanAnnotation) -> List[AnnotationPart]:
+        label_id = int(annotation.id if "-" not in annotation.id else NO_LABEL_ID)
         return [
-            AnnotationPart(tokens=annotation.tokens, layer=self, field=field, label=annotation.features[field])
+            AnnotationPart(
+                tokens=annotation.tokens, layer=self, field=field, label=annotation.features[field], label_id=label_id
+            )
             for field in self.fields
             if field in annotation.features
         ]
@@ -260,7 +263,7 @@ class RelationLayer(LayerDefinition):
         return RelationAnnotation(id=id, source=source, target=target, features=feature_values)
 
     def annotation_to_parts(self, annotation: RelationAnnotation) -> List[AnnotationPart]:
-        label_id = annotation.id if "-" not in annotation.id else NO_LABEL_ID
+        label_id = int(annotation.id if "-" not in annotation.id else NO_LABEL_ID)
         result = [
             AnnotationPart(
                 tokens=annotation.target.tokens,
