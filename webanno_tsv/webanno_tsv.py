@@ -158,6 +158,12 @@ class LayerDefinition(abc.ABC):
     def annotation_to_parts(self, annotation: Annotation) -> List[AnnotationPart]:
         pass
 
+    def annotations_to_parts(self, annotations: Sequence[Annotation]) -> List[AnnotationPart]:
+        result = []
+        for annotation in annotations:
+            result += self.annotation_to_parts(annotation)
+        return result
+
 
 @dataclass(frozen=True)
 class SpanLayer(LayerDefinition):
@@ -186,6 +192,7 @@ class SpanLayer(LayerDefinition):
         return [
             AnnotationPart(tokens=annotation.tokens, layer=self, field=field, label=annotation.features[field])
             for field in self.fields
+            if field in annotation.features
         ]
 
 
@@ -253,11 +260,23 @@ class RelationLayer(LayerDefinition):
         return RelationAnnotation(id=id, source=source, target=target, features=feature_values)
 
     def annotation_to_parts(self, annotation: RelationAnnotation) -> List[AnnotationPart]:
+        label_id = annotation.id if "-" not in annotation.id else NO_LABEL_ID
         result = [
-            AnnotationPart(tokens=annotation.target.tokens, layer=self, field=field, label=annotation.features[field])
+            AnnotationPart(tokens=annotation.target.tokens, layer=self, field=field, label=annotation.features[field], label_id=label_id)
             for field in self.value_fields
+            if field in annotation.features
         ]
-        # TODO: add source annotation part
+        source_tokens = annotation.source.tokens[0]
+        source = f"{source_tokens.sentence_idx}-{source_tokens.idx}"
+        source_id = annotation.source.id if "-" not in annotation.source.id else "0"
+        target_id = annotation.target.id if "-" not in annotation.target.id else "0"
+        if not (source_id == "0" and target_id == "0"):
+            source += f"[{source_id}_{target_id}]"
+
+        source_annotation_part = AnnotationPart(
+            tokens=annotation.source.tokens, layer=self, field=self.source_field, label=source, label_id=label_id
+        )
+        result.append(source_annotation_part)
         return result
 
 
@@ -296,7 +315,7 @@ class Document:
     sentences: Sequence[Sentence]
     tokens: Sequence[Token]
     annotation_parts: Sequence[AnnotationPart]
-    annotations: Dict[str, Sequence[Annotation]]
+    annotations: Dict[LayerDefinition, Sequence[Annotation]]
     path: str = ''
 
     def __post_init__(self):
@@ -311,6 +330,13 @@ class Document:
             result += SENTENCE_PADDING_CHAR * (start - len(result))
             result += sentence.text
         return result
+
+    @property
+    def new_annotation_parts(self) -> Sequence[AnnotationPart]:
+        annotation_parts = []
+        for layer, annotations in self.annotations.items():
+            annotation_parts += layer.annotations_to_parts(annotations)
+        return annotation_parts
 
     @classmethod
     def empty(cls, layers: Optional[Sequence[LayerDefinition]] = None):
