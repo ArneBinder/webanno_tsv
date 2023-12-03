@@ -4,7 +4,7 @@ import itertools
 import re
 from collections import defaultdict
 from dataclasses import dataclass, replace
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Any
 
 NO_LABEL_ID = -1
 
@@ -41,7 +41,7 @@ class WebannoTsvDialect(csv.Dialect):
     quoting = csv.QUOTE_NONE
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, order=True)
 class Token:
     sentence_idx: int
     idx: int
@@ -54,12 +54,12 @@ class Token:
 class Sentence:
     idx: int
     text: str
-    tokens: Tuple[Token]
+    tokens: Tuple[Token, ...]
 
 
-@dataclass(frozen=True, eq=False)  # Annotation parts are compared/hashed base on object identity
+@dataclass(frozen=True, order=True)
 class AnnotationPart:
-    tokens: Sequence[Token]
+    tokens: Tuple[Token, ...]
     layer: 'LayerDefinition'
     field: str
     label: str
@@ -93,13 +93,13 @@ class AnnotationPart:
                and self.layer == other.layer
 
     def merge(self, *other: 'AnnotationPart') -> 'AnnotationPart':
-        return replace(self, tokens=token_sort(list(self.tokens) + [t for o in other for t in o.tokens]))
+        return replace(self, tokens=tuple(token_sort(list(self.tokens) + [t for o in other for t in o.tokens])))
 
     @property
     def annotation_id(self) -> Optional[str]:
         if self.label_id == NO_LABEL_ID:
             if len(self.tokens) != 1:
-                return None
+                raise ValueError(f"Cannot create annotation id for multi-token annotation without label id: {self}")
             else:
                 return f"{self.tokens[0].sentence_idx}-{self.tokens[0].idx}"
         else:
@@ -109,7 +109,7 @@ class AnnotationPart:
 @dataclass(frozen=True)
 class Annotation(abc.ABC):
     id: str
-    features: Dict[str, str]
+    features: Dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -123,7 +123,7 @@ class RelationAnnotation(Annotation):
     target: SpanAnnotation
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, order=True)
 class LayerDefinition(abc.ABC):
     name: str
     fields: Tuple[str, ...]
@@ -144,7 +144,7 @@ class LayerDefinition(abc.ABC):
         fields_labels_ids = [(f, _read_label_and_id(val)) for f, val in fields_values]
         fields_labels_ids_filtered = [(f, label, lid) for (f, (label, lid)) in fields_labels_ids if label != '']
 
-        return [AnnotationPart(tokens=[token], layer=self, field=field, label=label, label_id=lid) for
+        return [AnnotationPart(tokens=(token,), layer=self, field=field, label=label, label_id=lid) for
                 field, label, lid in fields_labels_ids_filtered]
 
     @abc.abstractmethod
@@ -183,10 +183,10 @@ class SpanLayer(LayerDefinition):
         return f'#T_SP={name}'
 
     def new_annotation(
-        self, id: str, previous_annotations: Dict['LayerDefinition', List[Annotation]], tokens: List[Token],
+        self, id: str, previous_annotations: Dict['LayerDefinition', List[Annotation]], tokens: Tuple[Token, ...],
         **features
     ) -> 'Annotation':
-        return SpanAnnotation(id=id, tokens=tuple(tokens), features=features)
+        return SpanAnnotation(id=id, tokens=tokens, features=features)
 
     def annotation_to_parts(self, annotation: SpanAnnotation) -> List[AnnotationPart]:
         return [
@@ -262,7 +262,13 @@ class RelationLayer(LayerDefinition):
     def annotation_to_parts(self, annotation: RelationAnnotation) -> List[AnnotationPart]:
         label_id = annotation.id if "-" not in annotation.id else NO_LABEL_ID
         result = [
-            AnnotationPart(tokens=annotation.target.tokens, layer=self, field=field, label=annotation.features[field], label_id=label_id)
+            AnnotationPart(
+                tokens=annotation.target.tokens,
+                layer=self,
+                field=field,
+                label=annotation.features[field],
+                label_id=label_id,
+            )
             for field in self.value_fields
             if field in annotation.features
         ]

@@ -224,16 +224,16 @@ class WebannoTsvWriteTest(unittest.TestCase):
         ], layers=DEFAULT_LAYERS)
 
         annotations = [
-            AnnotationPart(tokens=doc.tokens[0:1], layer=doc.get_layer('l1'), field='pos', label='pos-val'),
-            AnnotationPart(tokens=doc.tokens[0:1], layer=doc.get_layer('l2'), field='lemma', label='first'),
-            AnnotationPart(tokens=doc.tokens[1:2], layer=doc.get_layer('l2'), field='lemma', label='sentence'),
-            AnnotationPart(tokens=doc.tokens[2:4], layer=doc.get_layer('l3'), field='named_entity', label='smiley-end', label_id=37),
-            AnnotationPart(tokens=doc.tokens[3:4], layer=doc.get_layer('l3'), field='named_entity', label='DOT'),
-            AnnotationPart(tokens=doc.tokens[7:8], layer=doc.get_layer('l1'), field='pos', label='dot'),
-            AnnotationPart(tokens=doc.tokens[5:6], layer=doc.get_layer('l2'), field='lemma', label='sentence'),
-            AnnotationPart(tokens=doc.tokens[7:8], layer=doc.get_layer('l2'), field='lemma', label='.'),
-            AnnotationPart(tokens=doc.tokens[4:5], layer=doc.get_layer('l3'), field='named_entity', label='XYZ'),
-            AnnotationPart(tokens=doc.tokens[6:7], layer=doc.get_layer('l3'), field='named_entity', label='escape|this\\field'),
+            AnnotationPart(tokens=tuple(doc.tokens[0:1]), layer=doc.get_layer('l1'), field='pos', label='pos-val'),
+            AnnotationPart(tokens=tuple(doc.tokens[0:1]), layer=doc.get_layer('l2'), field='lemma', label='first'),
+            AnnotationPart(tokens=tuple(doc.tokens[1:2]), layer=doc.get_layer('l2'), field='lemma', label='sentence'),
+            AnnotationPart(tokens=tuple(doc.tokens[2:4]), layer=doc.get_layer('l3'), field='named_entity', label='smiley-end', label_id=37),
+            AnnotationPart(tokens=tuple(doc.tokens[3:4]), layer=doc.get_layer('l3'), field='named_entity', label='DOT'),
+            AnnotationPart(tokens=tuple(doc.tokens[7:8]), layer=doc.get_layer('l1'), field='pos', label='dot'),
+            AnnotationPart(tokens=tuple(doc.tokens[5:6]), layer=doc.get_layer('l2'), field='lemma', label='sentence'),
+            AnnotationPart(tokens=tuple(doc.tokens[7:8]), layer=doc.get_layer('l2'), field='lemma', label='.'),
+            AnnotationPart(tokens=tuple(doc.tokens[4:5]), layer=doc.get_layer('l3'), field='named_entity', label='XYZ'),
+            AnnotationPart(tokens=tuple(doc.tokens[6:7]), layer=doc.get_layer('l3'), field='named_entity', label='escape|this\\field'),
         ]
 
         doc = replace(doc, annotation_parts=annotations)
@@ -263,9 +263,9 @@ class WebannoTsvWriteTest(unittest.TestCase):
     def test_label_id_is_added_on_writing(self):
         doc = Document.from_token_lists([['A', 'B', 'C', 'D']], layers=DEFAULT_LAYERS)
 
-        a_with_id = AnnotationPart(tokens=doc.tokens[1:3], layer=doc.get_layer('l3'), field='named_entity', label='BC', label_id=67)
-        a_without = AnnotationPart(tokens=doc.tokens[2:4], layer=doc.get_layer('l3'), field='named_entity', label='CD')
-        a_single_token = AnnotationPart(tokens=doc.tokens[3:4], layer=doc.get_layer('l3'), field='named_entity', label='D')
+        a_with_id = AnnotationPart(tokens=tuple(doc.tokens[1:3]), layer=doc.get_layer('l3'), field='named_entity', label='BC', label_id=67)
+        a_without = AnnotationPart(tokens=tuple(doc.tokens[2:4]), layer=doc.get_layer('l3'), field='named_entity', label='CD')
+        a_single_token = AnnotationPart(tokens=tuple(doc.tokens[3:4]), layer=doc.get_layer('l3'), field='named_entity', label='D')
         doc = replace(doc, annotation_parts=[a_with_id, a_without, a_single_token])
 
         doc_new = webanno_tsv_read_string(doc.tsv())
