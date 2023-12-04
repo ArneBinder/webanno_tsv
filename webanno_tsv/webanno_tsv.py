@@ -14,6 +14,7 @@ RELATION_LAYER_DEF_RE = re.compile(r'^#T_RL=([^|]+)\|(.*)$')
 RELATION_BASE_LAYER = re.compile(r'^BT_(.+)$')
 SENTENCE_RE = re.compile('^#Text=(.*)')
 FIELD_EMPTY_RE = re.compile('^[_*]')
+#FIELD_WITH_ID_RE = re.compile(r'(.*)\[([0-9]+)(?:_([0-9]+))?]$')
 FIELD_WITH_ID_RE = re.compile(r'(.*)\[([0-9]*)]$')
 SUB_TOKEN_RE = re.compile(r'[0-9]+-[0-9]+\.[0-9]+')
 RELATION_SOURCE_RE = re.compile(r'^([0-9]+-[0-9]+)(?:\[([0-9]+)_([0-9]+)\])?$')
@@ -523,6 +524,14 @@ def _read_label_and_id(field: str) -> Tuple[str, int]:
 
     match = FIELD_WITH_ID_RE.match(field)
     if match:
+        ## handle relation ids
+        #if match.group(3) is not None:
+        #    rel_target_id = int(match.group(3))
+        #    # 0 indicates no disambiguation
+        #    rel_id = NO_LABEL_ID if rel_target_id == 0 else rel_target_id
+        #    return handle_label(match.group(1) + f"[{match.group(2)}]"), rel_id
+        #else:
+        #    return handle_label(match.group(1)), int(match.group(2))
         return handle_label(match.group(1)), int(match.group(2))
     else:
         return handle_label(field), NO_LABEL_ID
