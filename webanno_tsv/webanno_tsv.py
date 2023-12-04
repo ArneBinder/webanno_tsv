@@ -33,6 +33,15 @@ MULTILINE_SPLIT_CHAR = '\f'
 SENTENCE_PADDING_CHAR = '\n'
 
 
+def dict_of_lists_to_list_of_dicts(d: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
+    """
+    Convert a dictionary of lists to a list of dictionaries, where each
+    dictionary in the list has the same keys as the original dictionary,
+    but the values are the elements of the lists at the same index.
+    """
+    return [dict(zip(d.keys(), t)) for t in zip(*d.values())]
+
+
 class WebannoTsvDialect(csv.Dialect):
     delimiter = '\t'
     quotechar = None  # disables escaping
@@ -600,16 +609,22 @@ def _tsv_read_lines(lines: List[str], overriding_layer_names: Dict[str, Sequence
         )
         sentences.append(sentence)
 
-    features_per_layer_and_id = defaultdict(lambda: defaultdict(dict))
+    # we can have multiple annotations with the same annotation_id because it does not include the id for relations
+    features_per_layer_and_id = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+    tokens_per_layer_and_id = defaultdict(dict)
     for annotation_part in annotation_parts:
-        features_per_layer_and_id[annotation_part.layer][annotation_part.annotation_id][annotation_part.field] = annotation_part.label
-        features_per_layer_and_id[annotation_part.layer][annotation_part.annotation_id]["tokens"] = annotation_part.tokens
+        features_per_layer_and_id[annotation_part.layer][annotation_part.annotation_id][annotation_part.field].append(annotation_part.label)
+        tokens_per_layer_and_id[annotation_part.layer][annotation_part.annotation_id] = annotation_part.tokens
 
     annotations = defaultdict(list)
     for layer in layers:
-        for annotation_id, tokens_and_features in features_per_layer_and_id[layer].items():
-            annotation = layer.new_annotation(id=annotation_id, previous_annotations=annotations, **tokens_and_features)
-            annotations[layer].append(annotation)
+        for annotation_id, feature_lists in features_per_layer_and_id[layer].items():
+            annotation_tokens = tokens_per_layer_and_id[layer][annotation_id]
+            for features in dict_of_lists_to_list_of_dicts(feature_lists):
+                annotation = layer.new_annotation(
+                    id=annotation_id, previous_annotations=annotations, tokens=annotation_tokens, **features
+                )
+                annotations[layer].append(annotation)
 
     return Document(
         layers=layers,
