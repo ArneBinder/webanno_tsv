@@ -19,6 +19,8 @@ FIELD_WITH_ID_RE = re.compile(r'(.*)\[([0-9]*)]$')
 SUB_TOKEN_RE = re.compile(r'[0-9]+-[0-9]+\.[0-9]+')
 RELATION_SOURCE_RE = re.compile(r'^([0-9]+-[0-9]+)(?:\[([0-9]+)_([0-9]+)\])?$')
 
+TOKEN_ID_RE = re.compile(r'^([0-9]+)-([0-9]+)$')
+
 HEADERS = ['#FORMAT=WebAnno TSV 3.3']
 
 TOKEN_FIELDNAMES = ['sent_tok_idx', 'offsets', 'token']
@@ -109,7 +111,7 @@ class AnnotationPart:
     def annotation_id(self) -> Optional[str]:
         if self.label_id == NO_LABEL_ID:
             if len(self.tokens) != 1:
-                raise ValueError(f"Cannot create annotation id for multi-token annotation without label id: {self}")
+                return str(NO_LABEL_ID)
             else:
                 return f"{self.tokens[0].sentence_idx}-{self.tokens[0].idx}"
         else:
@@ -199,7 +201,7 @@ class SpanLayer(LayerDefinition):
         return SpanAnnotation(id=id, tokens=tokens, features=features)
 
     def annotation_to_parts(self, annotation: SpanAnnotation) -> List[AnnotationPart]:
-        label_id = int(annotation.id if "-" not in annotation.id else NO_LABEL_ID)
+        label_id = int(annotation.id if not TOKEN_ID_RE.match(annotation.id) else NO_LABEL_ID)
         return [
             AnnotationPart(
                 tokens=annotation.tokens, layer=self, field=field, label=annotation.features[field], label_id=label_id
@@ -275,7 +277,7 @@ class RelationLayer(LayerDefinition):
     def annotation_to_parts(self, annotation: RelationAnnotation) -> List[AnnotationPart]:
         # annotate only the first token
         tokens = annotation.target.tokens[:1]
-        label_id = int(annotation.id if "-" not in annotation.id else NO_LABEL_ID)
+        label_id = int(annotation.id if not TOKEN_ID_RE.match(annotation.id) else NO_LABEL_ID)
         result = [
             AnnotationPart(
                 tokens=tokens,
@@ -289,8 +291,8 @@ class RelationLayer(LayerDefinition):
         ]
         source_tokens = annotation.source.tokens[0]
         source = f"{source_tokens.sentence_idx}-{source_tokens.idx}"
-        source_id = annotation.source.id if "-" not in annotation.source.id else "0"
-        target_id = annotation.target.id if "-" not in annotation.target.id else "0"
+        source_id = annotation.source.id if not TOKEN_ID_RE.match(annotation.source.id) else "0"
+        target_id = annotation.target.id if not TOKEN_ID_RE.match(annotation.target.id) else "0"
         if not (source_id == "0" and target_id == "0"):
             source += f"[{source_id}_{target_id}]"
 
@@ -335,7 +337,6 @@ class Document:
     layers: Sequence[LayerDefinition]
     sentences: Sequence[Sentence]
     tokens: Sequence[Token]
-    annotation_parts: Sequence[AnnotationPart]
     annotations: Dict[LayerDefinition, Sequence[Annotation]]
     path: str = ''
 
@@ -353,7 +354,7 @@ class Document:
         return result
 
     @property
-    def new_annotation_parts(self) -> Sequence[AnnotationPart]:
+    def annotation_parts(self) -> Sequence[AnnotationPart]:
         annotation_parts = []
         for layer, annotations in self.annotations.items():
             annotation_parts += layer.annotations_to_parts(annotations)
@@ -363,7 +364,7 @@ class Document:
     def empty(cls, layers: Optional[Sequence[LayerDefinition]] = None):
         if layers is None:
             layers = []
-        return cls(layers, [], [], [], {})
+        return cls(layers, [], [], {})
 
     @classmethod
     def from_token_lists(
@@ -557,6 +558,29 @@ def _filter_sentences(lines: List[str]) -> List[str]:
     return [MULTILINE_SPLIT_CHAR.join(group) for group in text_groups]
 
 
+def _convert_annotation_parts_to_annotations(
+        annotation_parts: Sequence[AnnotationPart], layers: Sequence[LayerDefinition]
+) -> Dict[LayerDefinition, List[Annotation]]:
+    # we can have multiple annotations with the same annotation_id because it does not include the id for relations
+    features_per_layer_and_id = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+    tokens_per_layer_and_id = defaultdict(dict)
+    for annotation_part in annotation_parts:
+        features_per_layer_and_id[annotation_part.layer][annotation_part.annotation_id][annotation_part.field].append(annotation_part.label)
+        tokens_per_layer_and_id[annotation_part.layer][annotation_part.annotation_id] = annotation_part.tokens
+
+    annotations = defaultdict(list)
+    for layer in layers:
+        for annotation_id, feature_lists in features_per_layer_and_id[layer].items():
+            annotation_tokens = tokens_per_layer_and_id[layer][annotation_id]
+            for features in dict_of_lists_to_list_of_dicts(feature_lists):
+                annotation = layer.new_annotation(
+                    id=annotation_id, previous_annotations=annotations, tokens=annotation_tokens, **features
+                )
+                annotations[layer].append(annotation)
+
+    return annotations
+
+
 def _tsv_read_lines(lines: List[str], overriding_layer_names: Dict[str, Sequence[LayerDefinition]] = None) -> Document:
     non_comments = [line for line in lines if not COMMENT_RE.match(line)]
     token_data = [line for line in non_comments if not SUB_TOKEN_RE.match(line)]
@@ -609,28 +633,12 @@ def _tsv_read_lines(lines: List[str], overriding_layer_names: Dict[str, Sequence
         )
         sentences.append(sentence)
 
-    # we can have multiple annotations with the same annotation_id because it does not include the id for relations
-    features_per_layer_and_id = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
-    tokens_per_layer_and_id = defaultdict(dict)
-    for annotation_part in annotation_parts:
-        features_per_layer_and_id[annotation_part.layer][annotation_part.annotation_id][annotation_part.field].append(annotation_part.label)
-        tokens_per_layer_and_id[annotation_part.layer][annotation_part.annotation_id] = annotation_part.tokens
-
-    annotations = defaultdict(list)
-    for layer in layers:
-        for annotation_id, feature_lists in features_per_layer_and_id[layer].items():
-            annotation_tokens = tokens_per_layer_and_id[layer][annotation_id]
-            for features in dict_of_lists_to_list_of_dicts(feature_lists):
-                annotation = layer.new_annotation(
-                    id=annotation_id, previous_annotations=annotations, tokens=annotation_tokens, **features
-                )
-                annotations[layer].append(annotation)
+    annotations = _convert_annotation_parts_to_annotations(annotation_parts, layers)
 
     return Document(
         layers=layers,
         sentences=sentences,
         tokens=tokens,
-        annotation_parts=annotation_parts,
         annotations=annotations,
     )
 

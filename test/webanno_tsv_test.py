@@ -5,7 +5,8 @@ from dataclasses import replace
 from webanno_tsv.webanno_tsv import (
     webanno_tsv_read_file, webanno_tsv_read_string,
     AnnotationPart, Document, Sentence, Token,
-    NO_LABEL_ID, SENTENCE_PADDING_CHAR, SpanLayer
+    NO_LABEL_ID, SENTENCE_PADDING_CHAR, SpanLayer,
+    _convert_annotation_parts_to_annotations,
 )
 
 # These are used to override the actual layer names in the test files for brevity
@@ -235,8 +236,8 @@ class WebannoTsvWriteTest(unittest.TestCase):
             AnnotationPart(tokens=tuple(doc.tokens[4:5]), layer=doc.get_layer('l3'), field='named_entity', label='XYZ'),
             AnnotationPart(tokens=tuple(doc.tokens[6:7]), layer=doc.get_layer('l3'), field='named_entity', label='escape|this\\field'),
         ]
-
-        doc = replace(doc, annotation_parts=annotations)
+        annotations = _convert_annotation_parts_to_annotations(annotations, layers=doc.layers)
+        doc = replace(doc, annotations=annotations)
         result = doc.tsv()
 
         expected = [
@@ -266,7 +267,16 @@ class WebannoTsvWriteTest(unittest.TestCase):
         a_with_id = AnnotationPart(tokens=tuple(doc.tokens[1:3]), layer=doc.get_layer('l3'), field='named_entity', label='BC', label_id=67)
         a_without = AnnotationPart(tokens=tuple(doc.tokens[2:4]), layer=doc.get_layer('l3'), field='named_entity', label='CD')
         a_single_token = AnnotationPart(tokens=tuple(doc.tokens[3:4]), layer=doc.get_layer('l3'), field='named_entity', label='D')
-        doc = replace(doc, annotation_parts=[a_with_id, a_without, a_single_token])
+
+        annotations = _convert_annotation_parts_to_annotations([a_with_id, a_without, a_single_token], layers=doc.layers)
+        #annotations = {
+        #    doc.get_layer('l3'): [
+        #        SpanAnnotation(tokens=tuple(doc.tokens[1:3]), features=dict(named_entity='BC'), id="67"),
+        #        SpanAnnotation(tokens=tuple(doc.tokens[2:4]), features=dict(named_entity='CD'), id="68"),
+        #        SpanAnnotation(tokens=tuple(doc.tokens[3:4]), features=dict(named_entity='D'), id=str(NO_LABEL_ID)),
+        #    ]
+        #}
+        doc = replace(doc, annotations=annotations)
 
         doc_new = webanno_tsv_read_string(doc.tsv())
 
