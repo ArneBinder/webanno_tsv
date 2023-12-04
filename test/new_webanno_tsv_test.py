@@ -1,11 +1,10 @@
 import os
 import unittest
-from dataclasses import replace
 
 from webanno_tsv.new_webanno_tsv import (
     RowToken,
-    NO_LABEL_ID, SENTENCE_PADDING_CHAR, SpanLayerDefinition, NewDocument, SpanLayer, RelationLayerDefinition, RelationLayer,
-    NewSentence, NewToken, NewSpanAnnotation, NewRelationAnnotation,
+    NO_LABEL_ID, SENTENCE_PADDING_CHAR, SpanLayerDefinition, Document, SpanLayer, RelationLayerDefinition, RelationLayer,
+    Sentence, Token, SpanAnnotation, RelationAnnotation,
 )
 
 # These are used to override the actual layer names in the test files for brevity
@@ -34,10 +33,10 @@ class WebannoTsvCreateDocumentFromScratchEmpty(unittest.TestCase):
             SpanLayer(definition=SpanLayerDefinition('lemma', ('lemma',))),
             RelationLayer(definition=RelationLayerDefinition('relations', ('label', 'trigger'), base='pos')),
         ]
-        self.doc = NewDocument(layers)
+        self.doc = Document(layers)
 
     def test_empty_doc(self):
-        self.assertIsInstance(self.doc, NewDocument)
+        self.assertIsInstance(self.doc, Document)
         self.assertEqual(0, len(self.doc.sentences))
         self.assertEqual(0, len(self.doc.tokens))
         self.assertEqual("", self.doc.text)
@@ -51,26 +50,26 @@ class WebannoTsvCreateDocumentFromScratchWithAnnotations(unittest.TestCase):
             SpanLayer(definition=SpanLayerDefinition('lemma', ('lemma',))),
             RelationLayer(definition=RelationLayerDefinition('relations', ('label', 'trigger'), base='pos')),
         ]
-        doc = NewDocument(layers)
+        doc = Document(layers)
 
         first_sentence = (
-            NewSentence(text="This is a sentence.")
-            .add_token(NewToken(start=0, end=4), expected_text='This')
-            .add_token(NewToken(start=5, end=7), expected_text='is')
-            .add_token(NewToken(start=8, end=9), expected_text='a')
-            .add_token(NewToken(start=10, end=18), expected_text='sentence')
-            .add_token(NewToken(start=18, end=19), expected_text='.')
+            Sentence(text="This is a sentence.")
+            .add_token(Token(start=0, end=4), expected_text='This')
+            .add_token(Token(start=5, end=7), expected_text='is')
+            .add_token(Token(start=8, end=9), expected_text='a')
+            .add_token(Token(start=10, end=18), expected_text='sentence')
+            .add_token(Token(start=18, end=19), expected_text='.')
         )
         # Add a second sentence with an offset to test that the sentence padding char is added correctly
         sent_offset = 21
         doc = doc.add_sentence(first_sentence)
         second_sentence = (
-            NewSentence(text="This is \fanother sentence.")
-            .add_token(NewToken(start=0 + sent_offset, end=4 + sent_offset), expected_text='This')
-            .add_token(NewToken(start=5 + sent_offset, end=7 + sent_offset), expected_text='is')
-            .add_token(NewToken(start=9 + sent_offset, end=16 + sent_offset), expected_text='another')
-            .add_token(NewToken(start=17 + sent_offset, end=25 + sent_offset), expected_text='sentence')
-            .add_token(NewToken(start=25 + sent_offset, end=26 + sent_offset), expected_text='.')
+            Sentence(text="This is \fanother sentence.")
+            .add_token(Token(start=0 + sent_offset, end=4 + sent_offset), expected_text='This')
+            .add_token(Token(start=5 + sent_offset, end=7 + sent_offset), expected_text='is')
+            .add_token(Token(start=9 + sent_offset, end=16 + sent_offset), expected_text='another')
+            .add_token(Token(start=17 + sent_offset, end=25 + sent_offset), expected_text='sentence')
+            .add_token(Token(start=25 + sent_offset, end=26 + sent_offset), expected_text='.')
         )
         doc = doc.add_sentence(second_sentence)
 
@@ -78,19 +77,19 @@ class WebannoTsvCreateDocumentFromScratchWithAnnotations(unittest.TestCase):
         doc = doc.add_annotations(
             # add span annotations with some overlap
             layer_name='pos', annotations=[
-                NewSpanAnnotation(tokens=doc.tokens[2:3], values=('article',)),
-                NewSpanAnnotation(tokens=doc.tokens[2:4], values=('DT',)),
-                NewSpanAnnotation(tokens=doc.tokens[7:8], values=('DT',)),
+                SpanAnnotation(tokens=doc.tokens[2:3], values=('article',)),
+                SpanAnnotation(tokens=doc.tokens[2:4], values=('DT',)),
+                SpanAnnotation(tokens=doc.tokens[7:8], values=('DT',)),
             ]
         )
         doc = doc.add_annotations(
             layer_name='lemma', annotations=[
-                NewSpanAnnotation(tokens=doc.tokens[1:2], values=('be',)),
-                NewSpanAnnotation(tokens=doc.tokens[6:7], values=('be',)),
+                SpanAnnotation(tokens=doc.tokens[1:2], values=('be',)),
+                SpanAnnotation(tokens=doc.tokens[6:7], values=('be',)),
             ]
         )
         doc = doc.add_annotation(
-            layer_name='relations', annotation=NewRelationAnnotation(
+            layer_name='relations', annotation=RelationAnnotation(
                 values=('same_type', "another"),
                 source=doc.layers['pos'][1],
                 target=doc.layers['pos'][2],
@@ -105,14 +104,14 @@ class WebannoTsvCreateDocumentFromScratchWithAnnotations(unittest.TestCase):
 
         self.assertEqual({"pos", "lemma", "relations"}, set(self.doc.layers))
         self.assertEqual(3, len(self.doc.layers['pos']))
-        self.assertEqual(self.doc.layers['pos'][0], NewSpanAnnotation(tokens=self.doc.tokens[2:3], values=('article',)))
-        self.assertEqual(self.doc.layers['pos'][1], NewSpanAnnotation(tokens=self.doc.tokens[2:4], values=('DT',)))
-        self.assertEqual(self.doc.layers['pos'][2], NewSpanAnnotation(tokens=self.doc.tokens[7:8], values=('DT',)))
+        self.assertEqual(self.doc.layers['pos'][0], SpanAnnotation(tokens=self.doc.tokens[2:3], values=('article',)))
+        self.assertEqual(self.doc.layers['pos'][1], SpanAnnotation(tokens=self.doc.tokens[2:4], values=('DT',)))
+        self.assertEqual(self.doc.layers['pos'][2], SpanAnnotation(tokens=self.doc.tokens[7:8], values=('DT',)))
         self.assertEqual(2, len(self.doc.layers['lemma']))
-        self.assertEqual(self.doc.layers['lemma'][0], NewSpanAnnotation(tokens=self.doc.tokens[1:2], values=('be',)))
-        self.assertEqual(self.doc.layers['lemma'][1], NewSpanAnnotation(tokens=self.doc.tokens[6:7], values=('be',)))
+        self.assertEqual(self.doc.layers['lemma'][0], SpanAnnotation(tokens=self.doc.tokens[1:2], values=('be',)))
+        self.assertEqual(self.doc.layers['lemma'][1], SpanAnnotation(tokens=self.doc.tokens[6:7], values=('be',)))
         self.assertEqual(1, len(self.doc.layers['relations']))
-        self.assertEqual(self.doc.layers['relations'][0], NewRelationAnnotation(
+        self.assertEqual(self.doc.layers['relations'][0], RelationAnnotation(
             values=('same_type', "another"),
             source=self.doc.layers['pos'][1],
             target=self.doc.layers['pos'][2],
@@ -266,7 +265,7 @@ class WebannoTsvCreateDocumentFromScratchWithAnnotations(unittest.TestCase):
 class WebannoTsvFromFile(unittest.TestCase):
 
     def setUp(self) -> None:
-        self.doc = NewDocument.from_file(test_file('test_new.tsv'))
+        self.doc = Document.from_file(test_file('test_new.tsv'))
 
     def test_read_new_format(self):
         self.assertEqual(2, len(self.doc.sentences))

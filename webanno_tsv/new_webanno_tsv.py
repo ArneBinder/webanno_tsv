@@ -91,7 +91,8 @@ class LayerDefinition(abc.ABC):
     def from_lines(lines: List[str]) -> List['LayerDefinition']:
         return SpanLayerDefinition.from_lines(lines) + RelationLayerDefinition.from_lines(lines)
 
-    def new_layer(self, dicts: List[Dict[str, Tuple[str, int]]], annotation_to_id: Dict[Annotation, int], sentences: List['NewSentence']) -> 'Layer':
+    def new_layer(self, dicts: List[Dict[str, Tuple[str, int]]], annotation_to_id: Dict[Annotation, int], sentences: List[
+        'Sentence']) -> 'Layer':
 
         if isinstance(self, SpanLayerDefinition):
             return SpanLayer.from_dicts(definition=self, dicts=dicts, annotation_to_id=annotation_to_id, sentences=sentences)
@@ -171,11 +172,11 @@ class RelationLayerDefinition(LayerDefinition):
 
 
 @dataclass(frozen=True, order=True)
-class NewToken:
+class Token:
     start: int
     end: int
 
-    def row(self, sentence_idx: int, token_idx: int, sentence: 'NewSentence') -> List[str]:
+    def row(self, sentence_idx: int, token_idx: int, sentence: 'Sentence') -> List[str]:
         token_text = self.text(sentence.text, offset=-sentence.start)
         return [f"{sentence_idx}-{token_idx}", f"{self.start}-{self.end}", token_text]
 
@@ -184,11 +185,11 @@ class NewToken:
 
 
 @dataclass(frozen=True)
-class NewSentence:
+class Sentence:
     text: str
-    tokens: Tuple[NewToken, ...] = ()
+    tokens: Tuple[Token, ...] = ()
 
-    def add_token(self, token: NewToken, expected_text: Optional[str] = None) -> 'NewSentence':
+    def add_token(self, token: Token, expected_text: Optional[str] = None) -> 'Sentence':
         new_sentence = replace(self, tokens=tuple([*self.tokens, token]))
         if expected_text is not None:
             token_text = token.text(new_sentence.text, offset=-new_sentence.start)
@@ -219,14 +220,14 @@ class NewSentence:
 
 
 @dataclass(frozen=True)
-class NewSpanAnnotation(Annotation):
-    tokens: Tuple[NewToken, ...]
+class SpanAnnotation(Annotation):
+    tokens: Tuple[Token, ...]
 
 
 @dataclass(frozen=True)
-class NewRelationAnnotation(Annotation):
-    source: NewSpanAnnotation
-    target: NewSpanAnnotation
+class RelationAnnotation(Annotation):
+    source: SpanAnnotation
+    target: SpanAnnotation
 
 
 @dataclass(frozen=True)
@@ -252,7 +253,7 @@ class Layer(abc.ABC):
 
     @abc.abstractmethod
     def sentence_annotation_lines(
-            self, sentences: Sequence[NewSentence], annotation_to_id: Dict[Annotation, int]
+            self, sentences: Sequence[Sentence], annotation_to_id: Dict[Annotation, int]
     ) -> List[List[str]]:
         pass
 
@@ -267,7 +268,7 @@ class Layer(abc.ABC):
     @classmethod
     def from_dicts(
         cls, definition, dicts: List[Dict[str, Tuple[str, int]]], annotation_to_id: Dict[Annotation, int],
-        sentences: List['NewSentence']
+        sentences: List['Sentence']
     ) -> 'Layer':
         raise NotImplementedError()
 
@@ -276,11 +277,11 @@ class Layer(abc.ABC):
 class SpanLayer(Layer):
 
     def sentence_annotation_lines(
-        self, sentences: Sequence[NewSentence], annotation_to_id: Dict[Annotation, int]
+        self, sentences: Sequence[Sentence], annotation_to_id: Dict[Annotation, int]
     ) -> List[List[str]]:
         max_id = 1
         annotations_per_token = defaultdict(list)
-        annotation: NewSpanAnnotation
+        annotation: SpanAnnotation
         for annotation in self.annotations:
             for token in annotation.tokens:
                 annotations_per_token[token].append(annotation)
@@ -313,7 +314,7 @@ class SpanLayer(Layer):
 class RelationLayer(Layer):
 
     def sentence_annotation_lines(
-        self, sentences: Sequence[NewSentence], annotation_to_id: Dict[Annotation, int]
+        self, sentences: Sequence[Sentence], annotation_to_id: Dict[Annotation, int]
     ) -> List[List[str]]:
 
         token_to_indices = {}
@@ -322,7 +323,7 @@ class RelationLayer(Layer):
                 token_to_indices[token] = f"{sentence_idx+1}-{token_idx+1}"
 
         annotations_per_token = defaultdict(list)
-        annotation: NewRelationAnnotation
+        annotation: RelationAnnotation
         for annotation in self.annotations:
             annotations_per_token[annotation.target.tokens[0]].append(annotation)
 
@@ -351,11 +352,11 @@ class RelationLayer(Layer):
 
 
 @dataclass(frozen=True)
-class NewDocument:
+class Document:
     _layers: Sequence[Layer]
-    sentences: Sequence[NewSentence]
+    sentences: Sequence[Sentence]
 
-    def __init__(self, _layers: Sequence[Layer], sentences: Sequence[NewSentence] = None):
+    def __init__(self, _layers: Sequence[Layer], sentences: Sequence[Sentence] = None):
         object.__setattr__(self, '_layers', _layers)
         object.__setattr__(self, 'sentences', sentences or [])
 
@@ -363,7 +364,7 @@ class NewDocument:
     def layers(self) -> Dict[str, Layer]:
         return {layer.name: layer for layer in self._layers}
 
-    def add_sentence(self, sentence: NewSentence) -> 'NewDocument':
+    def add_sentence(self, sentence: Sentence) -> 'Document':
         return replace(self, sentences=[*self.sentences, sentence])
 
     @property
@@ -379,7 +380,7 @@ class NewDocument:
             result += sentence.text
         return result
 
-    def add_annotations(self, layer_name: str, annotations: Sequence[Annotation]) -> 'NewDocument':
+    def add_annotations(self, layer_name: str, annotations: Sequence[Annotation]) -> 'Document':
         layer, idx = {l.name: (l, i) for i, l in enumerate(self._layers)}[layer_name]
         # verify that all features are satisfied
         for annotation in annotations:
@@ -397,7 +398,7 @@ class NewDocument:
         new_layer = layer.extend(annotations)
         return replace(self, _layers=[*self._layers[:idx], new_layer, *self._layers[idx + 1:]])
 
-    def add_annotation(self, layer_name: str, annotation: Annotation) -> 'NewDocument':
+    def add_annotation(self, layer_name: str, annotation: Annotation) -> 'Document':
         return self.add_annotations(layer_name, [annotation])
 
     def header_lines(self) -> List[str]:
@@ -429,7 +430,7 @@ class NewDocument:
         return linebreak.join(lines)
 
     @classmethod
-    def from_lines(cls, lines: List[str]) -> 'NewDocument':
+    def from_lines(cls, lines: List[str]) -> 'Document':
         non_comments = [line for line in lines if not COMMENT_RE.match(line)]
         token_data = [line for line in non_comments if not SUB_TOKEN_RE.match(line)]
         sentence_strs = _filter_sentences(lines)
@@ -443,14 +444,14 @@ class NewDocument:
 
         annotations = {layer_def: [] for layer_def in layer_definitions}
         tokens = []
-        sentences = {idx + 1: NewSentence(text=s) for idx, s in enumerate(sentence_strs)}
+        sentences = {idx + 1: Sentence(text=s) for idx, s in enumerate(sentence_strs)}
         for row in rows:
             # consume the first three columns of each line
             token = _read_token(row)
             tokens.append(token)
 
             sent_idx = token.sentence_idx
-            sentences[sent_idx] = sentences[sent_idx].add_token(NewToken(start=token.start, end=token.end), token.text)
+            sentences[sent_idx] = sentences[sent_idx].add_token(Token(start=token.start, end=token.end), token.text)
             for layer_def in layer_definitions:
                 annotation_dicts = layer_def.read_annotation_row(row, token_idx=token.idx, sentence_idx=sent_idx)
                 if annotation_dicts:
@@ -461,7 +462,7 @@ class NewDocument:
         return cls(_layers=layers, sentences=tuple(sentences.values()))
 
     @classmethod
-    def from_file(cls, path: str) -> 'NewDocument':
+    def from_file(cls, path: str) -> 'Document':
         with open(path, 'r', encoding='utf-8') as f:
             return cls.from_lines(f.readlines())
 
