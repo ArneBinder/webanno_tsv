@@ -91,25 +91,23 @@ class LayerDefinition(abc.ABC):
     def from_lines(lines: List[str]) -> List['LayerDefinition']:
         return SpanLayerDefinition.from_lines(lines) + RelationLayerDefinition.from_lines(lines)
 
-    def new_layer(self, dicts: List[Dict[str, Tuple[str, int]]], annotation_to_id: Dict[Annotation, int], sentences: List[
-        'Sentence']) -> 'Layer':
+    def new_layer(
+            self, rows: List[Tuple[int, int, Dict[str, str]]], annotation_to_id: Dict[Annotation, int], sentences: Dict[int, 'Sentence']
+    ) -> 'Layer':
 
         if isinstance(self, SpanLayerDefinition):
-            return SpanLayer.from_dicts(definition=self, dicts=dicts, annotation_to_id=annotation_to_id, sentences=sentences)
+            return SpanLayer.from_rows(definition=self, rows=rows, annotation_to_id=annotation_to_id, sentences=sentences)
         elif isinstance(self, RelationLayerDefinition):
-            return RelationLayer.from_dicts(definition=self, dicts=dicts, annotation_to_id=annotation_to_id, sentences=sentences)
+            return RelationLayer.from_rows(definition=self, rows=rows, annotation_to_id=annotation_to_id, sentences=sentences)
         else:
             raise ValueError(f"Unknown layer definition type {type(self)}")
 
-    def read_annotation_row(self, row: Dict, token_idx: int, sentence_idx: int) -> List[Dict[str, Tuple[str, int]]]:
+    def read_annotation_row(self, row: Dict) -> List[Dict[str, str]]:
         result = []
         layer_values = {field: _read_annotation_field(row, self, field) for field in self.fields}
         for d in dict_of_lists_to_list_of_dicts(layer_values):
-            values_with_id = {k: _read_label_and_id(v) for k, v in d.items()}
-            filtered = {k: (label, lid) for k, (label, lid) in values_with_id.items() if label != ''}
+            filtered = {k: v for k, v in d.items() if v != '_'}
             if len(filtered) > 0:
-                filtered["token_idx"] = token_idx
-                filtered["sentence_idx"] = sentence_idx
                 result.append(filtered)
         return result
 
@@ -122,7 +120,6 @@ class SpanLayerDefinition(LayerDefinition):
         span_matches = [SPAN_LAYER_DEF_RE.match(line) for line in lines]
         layers = [SpanLayerDefinition(name=m.group(1), features=tuple(m.group(2).split('|'))) for m in span_matches if m]
         return layers
-
 
     def as_header(self) -> str:
         """
@@ -142,8 +139,12 @@ class RelationLayerDefinition(LayerDefinition):
         return len(self.features) + 1
 
     @property
+    def base_field(self) -> str:
+        return f"BT_{self.base}"
+
+    @property
     def fields(self) -> Tuple[str, ...]:
-        return self.features + (f"BT_{self.base}",)
+        return self.features + (self.base_field,)
 
     @staticmethod
     def from_lines(lines: List[str]) -> List['RelationLayerDefinition']:
@@ -161,13 +162,12 @@ class RelationLayerDefinition(LayerDefinition):
                 )
         return layers
 
-
     def as_header(self) -> str:
         """
             Example:
                 ('one', ['x', 'y', 'z']) => '#T_RL=one|x|y|z'
             """
-        name = '|'.join((self.name,) + self.features + (f"BT_{self.base}",))
+        name = '|'.join((self.name,) + self.features + (self.base_field,))
         return f'#T_RL={name}'
 
 
@@ -208,7 +208,7 @@ class Sentence:
         return self.tokens[-1].end
 
     def header_lines(self) -> List[str]:
-        return [f'#Text={text}' for text in self.text.split(MULTILINE_SPLIT_CHAR)]
+        return [''] + [f'#Text={text}' for text in self.text.split(MULTILINE_SPLIT_CHAR)]
 
     def annotation_lines(self, sentence_idx: int) -> List[List[str]]:
 
@@ -266,9 +266,8 @@ class Layer(abc.ABC):
         return result
 
     @classmethod
-    def from_dicts(
-        cls, definition, dicts: List[Dict[str, Tuple[str, int]]], annotation_to_id: Dict[Annotation, int],
-        sentences: List['Sentence']
+    def from_rows(
+        cls, definition: LayerDefinition, rows: List[Tuple[int, int, Dict[str, str]]], annotation_to_id: Dict[Annotation, int], sentences: Dict[int, 'Sentence']
     ) -> 'Layer':
         raise NotImplementedError()
 
@@ -308,6 +307,41 @@ class SpanLayer(Layer):
                 current_row = ['|'.join(item) if item else '_' for item in current_row_items]
                 sentence_rows.append(current_row)
             yield sentence_rows
+
+    @classmethod
+    def from_rows(
+        cls, definition: LayerDefinition, rows: List[Tuple[int, int, Dict[str, str]]], annotation_to_id: Dict[Annotation, int], sentences: Dict[int, 'Sentence']
+    ) -> 'Layer':
+        merged_data = {}
+        merged_tokens = defaultdict(list)
+        for sent_idx, token_idx, d in rows:
+            lid = None
+            d_without_id = {}
+            for k, v in d.items():
+                label, current_lid = _read_label_and_id(v)
+                if lid is not None and current_lid != lid:
+                    raise ValueError(f"Found multiple labels for the same annotation: {d}")
+                lid = current_lid
+                d_without_id[k] = label
+            if lid == NO_LABEL_ID:
+                lid = f"{sent_idx}-{token_idx}"
+            else:
+                lid = str(lid)
+            previous_data = merged_data.get(lid, d_without_id)
+            if previous_data != d_without_id:
+                raise ValueError(f"Found multiple labels for the same annotation: {d_without_id} != {previous_data}")
+            merged_data[lid] = d_without_id
+            token = sentences[sent_idx-1].tokens[token_idx-1]
+            merged_tokens[lid].append(token)
+
+        annotations = []
+        for k in merged_data:
+            d = merged_data[k]
+            values = tuple(d[f] for f in definition.features)
+            tokens = tuple(merged_tokens[k])
+            annotations.append(SpanAnnotation(values=values, tokens=tokens))
+            annotation_to_id[annotations[-1]] = k
+        return cls(definition=definition, annotations=tuple(annotations))
 
 
 @dataclass(frozen=True)
@@ -349,6 +383,26 @@ class RelationLayer(Layer):
                 sentence_rows.append(current_row)
 
             yield sentence_rows
+
+    @classmethod
+    def from_rows(
+        cls, definition: RelationLayerDefinition, rows: List[Tuple[int, int, Dict[str, str]]], annotation_to_id: Dict[Annotation, int], sentences: Dict[int, 'Sentence']
+    ) -> 'RelationLayer':
+        id_to_span = {v: k for k, v in annotation_to_id.items() if isinstance(k, SpanAnnotation)}
+        annotations = []
+        for sent_idx, token_idx, row in rows:
+            if set(row) != set(definition.fields):
+                raise ValueError(f"Row {row} does not contain all fields of layer {definition.name} ({definition.fields})")
+            base_value = row[definition.base_field]
+            source_idx, target_idx = _read_relation_source_and_target_idx(base_value, default_target_idx=f"{sent_idx}-{token_idx}")
+            source = id_to_span[source_idx]
+            target = id_to_span[target_idx]
+            other_values = tuple(_unescape(row[f]) for f in definition.features)
+            annotation = RelationAnnotation(values=other_values, source=source, target=target)
+            annotation_to_id[annotation] = token_idx
+            annotations.append(annotation)
+
+        return cls(definition=definition, annotations=tuple(annotations))
 
 
 @dataclass(frozen=True)
@@ -406,7 +460,6 @@ class Document:
         for layer in self._layers:
             result.append(layer.definition.as_header())
         result.append('')
-        result.append('')
         return result
 
     def sentence_lines(self) -> List[str]:
@@ -422,12 +475,14 @@ class Document:
                 # flatten the list of lists
                 row_items = [item for sublist in token_and_layer_items for item in sublist]
                 result.append('\t'.join(row_items))
-            result.append('')
             yield result
 
-    def tsv(self, linebreak='\n'):
-        lines = self.header_lines() + [line for sentence in self.sentence_lines() for line in sentence]
-        return linebreak.join(lines)
+    def lines(self, linebreak='\n') -> List[str]:
+        without_lb = self.header_lines() + [line for sentence in self.sentence_lines() for line in sentence]
+        return [line + linebreak for line in without_lb]
+
+    def tsv(self, linebreak='\n') -> str:
+        return ''.join(self.lines(linebreak))
 
     @classmethod
     def from_lines(cls, lines: List[str]) -> 'Document':
@@ -442,23 +497,23 @@ class Document:
             columns += layer_def.as_columns()
         rows = csv.DictReader(token_data, dialect=WebannoTsvDialect, fieldnames=TOKEN_FIELDNAMES + columns)
 
-        annotations = {layer_def: [] for layer_def in layer_definitions}
+        annotation_rows = {layer_def: [] for layer_def in layer_definitions}
         tokens = []
-        sentences = {idx + 1: Sentence(text=s) for idx, s in enumerate(sentence_strs)}
+        sentences = {idx: Sentence(text=s) for idx, s in enumerate(sentence_strs)}
         for row in rows:
             # consume the first three columns of each line
             token = _read_token(row)
             tokens.append(token)
 
-            sent_idx = token.sentence_idx
+            sent_idx = token.sentence_idx - 1
             sentences[sent_idx] = sentences[sent_idx].add_token(Token(start=token.start, end=token.end), token.text)
             for layer_def in layer_definitions:
-                annotation_dicts = layer_def.read_annotation_row(row, token_idx=token.idx, sentence_idx=sent_idx)
-                if annotation_dicts:
-                    annotations[layer_def].extend(annotation_dicts)
+                annotation_dicts = layer_def.read_annotation_row(row)
+                for annotation_dict in annotation_dicts:
+                    annotation_rows[layer_def].append((token.sentence_idx, token.idx, annotation_dict))
 
         annotation_to_id = {}
-        layers = [layer_def.new_layer(annotations[layer_def], annotation_to_id, sentences) for layer_def in layer_definitions]
+        layers = [layer_def.new_layer(annotation_rows[layer_def], annotation_to_id, sentences) for layer_def in layer_definitions]
         return cls(_layers=layers, sentences=tuple(sentences.values()))
 
     @classmethod
@@ -505,6 +560,23 @@ def _escape(text: str) -> str:
     for s in RESERVED_STRS:
         text = text.replace(s, '\\' + s)
     return text
+
+
+def _read_relation_source_and_target_idx(base_value: str, default_target_idx: str) -> Tuple[str, str]:
+    match = RELATION_SOURCE_RE.match(base_value)
+    if not match:
+        raise ValueError(f"Could not parse relation source from {base_value}")
+
+    if match.group(2) is None or match.group(2) == "0":
+        source_idx = match.group(1)
+    else:
+        source_idx = match.group(2)
+    if match.group(3) is None or match.group(3) == "0":
+        target_idx = default_target_idx
+    else:
+        target_idx = match.group(3)
+    return source_idx, target_idx
+
 
 
 def _read_token(row: Dict) -> RowToken:

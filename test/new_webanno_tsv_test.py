@@ -125,15 +125,14 @@ class WebannoTsvCreateDocumentFromScratchWithAnnotations(unittest.TestCase):
                 '#T_SP=lemma|lemma',
                 '#T_RL=relations|label|trigger|BT_pos',
                 '',
-                '',
             ],
             self.doc.header_lines()
         )
 
     def test_sentence_header_lines(self):
         self.assertEqual(2, len(self.doc.sentences))
-        self.assertEqual(['#Text=This is a sentence.'], self.doc.sentences[0].header_lines())
-        self.assertEqual(['#Text=This is ', '#Text=another sentence.'], self.doc.sentences[1].header_lines())
+        self.assertEqual(['', '#Text=This is a sentence.'], self.doc.sentences[0].header_lines())
+        self.assertEqual(['', '#Text=This is ', '#Text=another sentence.'], self.doc.sentences[1].header_lines())
 
     def test_sentence_annotation_lines(self):
         self.assertEqual(2, len(self.doc.sentences))
@@ -216,15 +215,16 @@ class WebannoTsvCreateDocumentFromScratchWithAnnotations(unittest.TestCase):
         lines = list(self.doc.sentence_lines())
         self.assertEqual(2, len(lines))
         self.assertEqual([
+            '',
             '#Text=This is a sentence.',
             '1-1\t0-4\tThis\t_\t_\t_\t_\t_',
             '1-2\t5-7\tis\t_\tbe\t_\t_\t_',
             '1-3\t8-9\ta\tarticle[1]|DT[2]\t_\t_\t_\t_',
             '1-4\t10-18\tsentence\tDT[2]\t_\t_\t_\t_',
             '1-5\t18-19\t.\t_\t_\t_\t_\t_',
-            '',
         ], lines[0])
         self.assertEqual([
+            '',
             '#Text=This is ',
             '#Text=another sentence.',
             '2-1\t21-25\tThis\t_\t_\t_\t_\t_',
@@ -232,7 +232,6 @@ class WebannoTsvCreateDocumentFromScratchWithAnnotations(unittest.TestCase):
             '2-3\t30-37\tanother\tDT\t_\tsame\_type\tanother\t1-3[2_0]',
             '2-4\t38-46\tsentence\t_\t_\t_\t_\t_',
             '2-5\t46-47\t.\t_\t_\t_\t_\t_',
-            '',
         ], lines[1])
 
     def test_tsv(self):
@@ -265,12 +264,10 @@ class WebannoTsvCreateDocumentFromScratchWithAnnotations(unittest.TestCase):
 class WebannoTsvFromFile(unittest.TestCase):
 
     def setUp(self) -> None:
-        self.doc = Document.from_file(test_file('test_new.tsv'))
+        with open(test_file('test_new.tsv'), 'r', encoding='utf-8') as f:
+            self.lines = f.readlines()
+        self.doc = Document.from_lines(self.lines)
 
     def test_read_new_format(self):
-        self.assertEqual(2, len(self.doc.sentences))
-        self.assertEqual(10, len(self.doc.tokens))
-        self.assertEqual(3, len(self.doc.layers))
-        self.assertEqual(3, len(self.doc.layers['pos']))
-        self.assertEqual(2, len(self.doc.layers['lemma']))
-        self.assertEqual(1, len(self.doc.layers['relations']))
+        lines = self.doc.lines()
+        self.assertEqual(self.lines, lines)
