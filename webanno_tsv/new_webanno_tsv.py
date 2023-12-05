@@ -218,6 +218,8 @@ class LayerDefinition(abc.ABC):
 
     @staticmethod
     def from_lines(lines: List[str]) -> List['LayerDefinition']:
+        # TODO: do not change order of layers! This is not a problem at the moment, because relation layers
+        #  are always defined after all span layers, but this might be a problem when adding chain layers.
         return SpanLayerDefinition.from_lines(lines) + RelationLayerDefinition.from_lines(lines)
 
     @abc.abstractmethod
