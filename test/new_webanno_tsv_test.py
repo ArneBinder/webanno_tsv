@@ -250,8 +250,9 @@ class WebannoTsvCreateDocumentFromScratchWithAnnotations(unittest.TestCase):
 class WebannoTsvFromFile(unittest.TestCase):
 
     def setUp(self) -> None:
-        fn = test_file('test_new.tsv')
-        #fn = test_file('test_input.tsv')
+        fn = test_file('test_simple.tsv')
+        # fn = test_file('test_input.tsv')  # requires INCREASE_ID_BY_NONE_ID_ANNOTATIONS = True
+        # fn = test_file('test_input_v3.3.tsv')
         with open(fn, 'r', encoding='utf-8') as f:
             self.lines = f.readlines()
         self.doc = Document.from_lines(self.lines)
