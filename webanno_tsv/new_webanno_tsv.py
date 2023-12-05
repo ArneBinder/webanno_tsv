@@ -34,6 +34,9 @@ MULTILINE_SPLIT_CHAR = '\f'
 # character used to pad text between sentences
 SENTENCE_PADDING_CHAR = '\n'
 
+# enable this to recreate the content of test_input.tsv
+INCREASE_ID_BY_NONE_ID_ANNOTATIONS = False
+
 
 def _unescape(text: str) -> str:
     for s in RESERVED_STRS:
@@ -322,6 +325,9 @@ class SpanLayerDefinition(LayerDefinition):
                             id2annotation[(self.name, str(max_id))] = annotation
                             max_id += 1
                         annotation_id = annotation_idx2id[annotation_idx]
+                    elif INCREASE_ID_BY_NONE_ID_ANNOTATIONS:
+                        if annotation_idx not in annotation_idx2id:
+                            max_id += 1
                     annotation_entries = self.write_annotation_features(annotation, annotation_id=annotation_id)
                     for i, entry in enumerate(annotation_entries):
                         current_row_items[i].append(entry)
