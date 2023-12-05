@@ -35,6 +35,18 @@ MULTILINE_SPLIT_CHAR = '\f'
 SENTENCE_PADDING_CHAR = '\n'
 
 
+def _unescape(text: str) -> str:
+    for s in RESERVED_STRS:
+        text = text.replace('\\' + s, s)
+    return text
+
+
+def _escape(text: str) -> str:
+    for s in RESERVED_STRS:
+        text = text.replace(s, '\\' + s)
+    return text
+
+
 def dict_of_lists_to_list_of_dicts(d: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
     """
     Convert a dictionary of lists to a list of dictionaries, where each
@@ -60,6 +72,24 @@ class RowToken:
     start: int
     end: int
     text: str
+
+    @staticmethod
+    def from_row(row: Dict) -> 'RowToken':
+        """
+        Construct a Token from the row object using the sentence from doc.
+        This converts the first three columns of the TSV, e.g.:
+            "2-3    13-20    example"
+        becomes:
+            Token(Sentence(idx=2), idx=3, start=13, end=20, text='example')
+        """
+
+        def intsplit(s: str):
+            return [int(s) for s in s.split('-')]
+
+        sent_idx, tok_idx = intsplit(row['sent_tok_idx'])
+        start, end = intsplit(row['offsets'])
+        text = _unescape(row['token'])
+        return RowToken(sentence_idx=sent_idx, idx=tok_idx, start=start, end=end, text=text)
 
 
 @dataclass(frozen=True, order=True)
@@ -126,7 +156,7 @@ class Sentence:
 
 @dataclass(frozen=True)
 class Annotation(abc.ABC):
-    values: Tuple[Any, ...]
+    values: Tuple[Optional[str], ...]
 
 
 @dataclass(frozen=True)
@@ -162,9 +192,9 @@ class Layer(abc.ABC):
         return len(self.annotations)
 
     def sentence_annotation_lines(
-            self, sentences: Sequence[Sentence], annotation_to_id: Dict[Annotation, int]
+            self, sentences: Sequence[Sentence], id2annotation: Dict[Tuple[str, str], Annotation]
     ) -> Iterator[List[List[str]]]:
-        yield from self.definition.sentence_annotation_lines(self.annotations, sentences, annotation_to_id)
+        yield from self.definition.sentence_annotation_lines(self.annotations, sentences, id2annotation)
 
 
 @dataclass(frozen=True, order=True)
@@ -195,38 +225,51 @@ class LayerDefinition(abc.ABC):
         self,
         annotations: Sequence[Annotation],
         sentences: Sequence[Sentence],
-        annotation_to_id: Dict[Annotation, int],
+        id2annotation: Dict[Tuple[str, str], Annotation],
     ) -> Iterator[List[List[str]]]:
         pass
 
     def build_layer(
         self,
         rows: List[RowAnnotation],
-        annotation_to_id: Dict[Annotation, str],
+        id2annotation: Dict[Tuple[str, str], Annotation],
         sentences: Dict[int, 'Sentence'],
     ) -> 'Layer':
-        annotations = self.build_annotations(rows=rows, annotation_to_id=annotation_to_id, sentences=sentences)
+        annotations = self.build_annotations(rows=rows, id2annotation=id2annotation, sentences=sentences)
         return Layer(definition=self, annotations=tuple(annotations))
+
+    def read_annotation_field(self, row: Dict, field_name: str) -> List[str]:
+        col_name = '|'.join([self.name, field_name])
+        return row[col_name].split('|') if row[col_name] else []
 
     def read_annotation_row(self, row: Dict, row_token: RowToken) -> List[RowAnnotation]:
         result = []
-        layer_values = {f: _read_annotation_field(row, self, f) for f in self.fields}
+        layer_values = {f: self.read_annotation_field(row, f) for f in self.fields}
         for d in dict_of_lists_to_list_of_dicts(layer_values):
             filtered = {k: v for k, v in d.items() if v != '_'}
             if len(filtered) > 0:
-                result.append(RowAnnotation(
-                    sentence_idx=row_token.sentence_idx, token_idx=row_token.idx, data=filtered
-                ))
+                result.append(
+                    RowAnnotation(
+                        sentence_idx=row_token.sentence_idx, token_idx=row_token.idx, data=filtered
+                    )
+                )
         return result
 
     @abc.abstractmethod
     def build_annotations(
         self,
         rows: List[RowAnnotation],
-        annotation_to_id: Dict[Annotation, str],
+        id2annotation: Dict[Tuple[str, str], Annotation],
         sentences: Dict[int, 'Sentence'],
     ) -> List[Annotation]:
         pass
+
+    @staticmethod
+    def write_annotation_features(annotation: Annotation, annotation_id: Optional[str] = None) -> List[str]:
+        result = [_escape(v) if v is not None else "*" for v in annotation.values]
+        if annotation_id is not None:
+            result = [f"{entry}[{annotation_id}]" for entry in result]
+        return result
 
 
 @dataclass(frozen=True)
@@ -248,41 +291,71 @@ class SpanLayerDefinition(LayerDefinition):
         self,
         annotations: Sequence[SpanAnnotation],
         sentences: Sequence[Sentence],
-        annotation_to_id: Dict[Annotation, int],
+        id2annotation: Dict[Tuple[str, str], Annotation],
     ) -> Iterator[List[List[str]]]:
         max_id = 1
-        annotations_per_token = defaultdict(list)
-        for annotation in annotations:
+        annotation_indices_require_id = set()
+        token2annotation_indices = defaultdict(list)
+        for idx, annotation in enumerate(annotations):
+            if len(annotation.tokens) > 1:
+                annotation_indices_require_id.add(idx)
             for token in annotation.tokens:
-                annotations_per_token[token].append(annotation)
+                token2annotation_indices[token].append(idx)
 
-        annotations_require_id = set()
-        for token, annotations in annotations_per_token.items():
-            if len(annotations) > 1:
-                annotations_require_id.update(annotations)
+        for token, indices in token2annotation_indices.items():
+            if len(indices) > 1:
+                annotation_indices_require_id.update(indices)
 
+        annotation_idx2id = {}
         for sentence in sentences:
             sentence_rows = []
             for token in sentence.tokens:
                 current_row_items = [[] for _ in range(len(self))]
-                for annotation in annotations_per_token.get(token, []):
+                for annotation_idx in token2annotation_indices.get(token, []):
                     annotation_id = None
-                    if annotation in annotations_require_id:
-                        if annotation not in annotation_to_id:
-                            annotation_to_id[annotation] = max_id
+                    annotation = annotations[annotation_idx]
+                    if annotation_idx in annotation_indices_require_id:
+                        if annotation_idx not in annotation_idx2id:
+                            annotation_idx2id[annotation_idx] = str(max_id)
+                            id2annotation[(self.name, str(max_id))] = annotation
                             max_id += 1
-                        annotation_id = annotation_to_id[annotation]
-                    annotation_entries = _write_annotation_features(annotation, id=annotation_id)
+                        annotation_id = annotation_idx2id[annotation_idx]
+                    annotation_entries = self.write_annotation_features(annotation, annotation_id=annotation_id)
                     for i, entry in enumerate(annotation_entries):
                         current_row_items[i].append(entry)
                 current_row = ['|'.join(item) if item else '_' for item in current_row_items]
                 sentence_rows.append(current_row)
             yield sentence_rows
 
+    @staticmethod
+    def _read_label_and_id(field: str, default_id: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Reads a Webanno TSV field value, returning a label and an id.
+        Returns an empty label for placeholder values '_', '*'
+        Examples:
+            "OBJ[6]" -> ("OBJ", "6)
+            "OBJ"    -> ("OBJ", default_id)
+            "_"      -> (None, None)
+            "*[6]"   -> (None, 6)
+        """
+
+        def handle_label(s: str):
+            return None if FIELD_EMPTY_RE.match(s) else _unescape(s)
+
+        match = FIELD_WITH_ID_RE.match(field)
+        if match:
+            return handle_label(match.group(1)), match.group(2)
+        else:
+            value = handle_label(field)
+            if value is None:
+                return None, None
+            else:
+                return value, default_id
+
     def build_annotations(
         self,
         rows: List[RowAnnotation],
-        annotation_to_id: Dict[Annotation, str],
+        id2annotation: Dict[Tuple[str, str], Annotation],
         sentences: Dict[int, 'Sentence'],
     ) -> List['SpanAnnotation']:
         merged_data = {}
@@ -291,15 +364,13 @@ class SpanLayerDefinition(LayerDefinition):
             lid = None
             d_without_id = {}
             for k, v in annotation_row.data.items():
-                label, current_lid = _read_label_and_id(v)
+                label, current_lid = self._read_label_and_id(field=v, default_id=annotation_row.idx)
                 if lid is not None and current_lid != lid:
                     raise ValueError(f"Found multiple labels for the same annotation: {annotation_row.data}")
                 lid = current_lid
                 d_without_id[k] = label
-            if lid == NO_LABEL_ID:
-                lid = annotation_row.idx
-            else:
-                lid = str(lid)
+            if lid is None:
+                raise ValueError(f"Could not find id for annotation row: {annotation_row}")
             previous_data = merged_data.get(lid, d_without_id)
             if previous_data != d_without_id:
                 raise ValueError(f"Found multiple labels for the same annotation: {d_without_id} != {previous_data}")
@@ -313,7 +384,7 @@ class SpanLayerDefinition(LayerDefinition):
             values = tuple(d[f] for f in self.features)
             tokens = tuple(merged_tokens[k])
             annotations.append(SpanAnnotation(values=values, tokens=tokens))
-            annotation_to_id[annotations[-1]] = k
+            id2annotation[(self.name, k)] = annotations[-1]
 
         return annotations
 
@@ -358,9 +429,10 @@ class RelationLayerDefinition(LayerDefinition):
         self,
         annotations: Sequence[RelationAnnotation],
         sentences: Sequence[Sentence],
-        annotation_to_id: Dict[Annotation, int],
+        id2annotation: Dict[Tuple[str, str], Annotation],
     ) -> Iterator[List[List[str]]]:
 
+        annotation2id = {a: lid for (layer_name, lid), a in id2annotation.items() if layer_name == self.base}
         token_to_indices = {}
         for sentence_idx, sentence in enumerate(sentences):
             for token_idx, token in enumerate(sentence.tokens):
@@ -375,13 +447,13 @@ class RelationLayerDefinition(LayerDefinition):
             for token_idx, token in enumerate(sentence.tokens):
                 current_row_items = [[] for _ in range(len(self))]
                 for annotation in annotations_per_token.get(token, []):
-                    annotation_entries = _write_annotation_features(annotation)
+                    annotation_entries = self.write_annotation_features(annotation)
 
                     source_token_indices = token_to_indices[annotation.source.tokens[0]]
-                    source_id = annotation_to_id.get(annotation.source, 0)
-                    target_id = annotation_to_id.get(annotation.target, 0)
+                    source_id = annotation2id.get(annotation.source, "0")
+                    target_id = annotation2id.get(annotation.target, "0")
                     source_entry = source_token_indices
-                    if source_id != 0 or target_id != 0:
+                    if source_id != "0" or target_id != "0":
                         source_entry += f"[{source_id}_{target_id}]"
                     annotation_entries.append(source_entry)
 
@@ -393,13 +465,28 @@ class RelationLayerDefinition(LayerDefinition):
 
             yield sentence_rows
 
+    @staticmethod
+    def _read_relation_source_and_target_idx(base_value: str, default_target_idx: str) -> Tuple[str, str]:
+        match = RELATION_SOURCE_RE.match(base_value)
+        if not match:
+            raise ValueError(f"Could not parse relation source from {base_value}")
+
+        if match.group(2) is None or match.group(2) == "0":
+            source_idx = match.group(1)
+        else:
+            source_idx = match.group(2)
+        if match.group(3) is None or match.group(3) == "0":
+            target_idx = default_target_idx
+        else:
+            target_idx = match.group(3)
+        return source_idx, target_idx
+
     def build_annotations(
         self,
         rows: List[RowAnnotation],
-        annotation_to_id: Dict[Annotation, str],
+        id2annotation: Dict[Tuple[str, str], Annotation],
         sentences: Dict[int, 'Sentence'],
     ) -> List['RelationAnnotation']:
-        id_to_span = {v: k for k, v in annotation_to_id.items() if isinstance(k, SpanAnnotation)}
         annotations = []
         for annotation_row in rows:
             if set(annotation_row.data) != set(self.fields):
@@ -407,14 +494,14 @@ class RelationLayerDefinition(LayerDefinition):
                     f"Row {annotation_row.data} does not contain all fields of layer {self.name} ({self.fields})"
                 )
             base_value = annotation_row.data[self.base_field]
-            source_idx, target_idx = _read_relation_source_and_target_idx(
+            source_idx, target_idx = self._read_relation_source_and_target_idx(
                 base_value=base_value, default_target_idx=annotation_row.idx
             )
-            source = id_to_span[source_idx]
-            target = id_to_span[target_idx]
+            source: SpanAnnotation = id2annotation[(self.base, source_idx)]
+            target: SpanAnnotation = id2annotation[(self.base, target_idx)]
             other_values = tuple(_unescape(annotation_row.data[f]) for f in self.features)
             annotation = RelationAnnotation(values=other_values, source=source, target=target)
-            annotation_to_id[annotation] = annotation_row.idx
+            id2annotation[(self.name, annotation_row.idx)] = annotation
             annotations.append(annotation)
 
         return annotations
@@ -474,8 +561,8 @@ class Document:
 
     def sentence_lines(self) -> List[str]:
 
-        annotation_to_id = {}
-        generators = [layer.sentence_annotation_lines(self.sentences, annotation_to_id) for layer in self._layers]
+        id2annotation = {}
+        generators = [layer.sentence_annotation_lines(self.sentences, id2annotation) for layer in self._layers]
         for sentence_idx, sentence_and_annotations in enumerate(zip(self.sentences, *generators)):
             sentence = sentence_and_annotations[0]
             annotation_lines = sentence_and_annotations[1:]
@@ -494,11 +581,22 @@ class Document:
     def tsv(self, linebreak='\n') -> str:
         return ''.join(self.lines(linebreak))
 
+    @staticmethod
+    def _filter_sentences(lines: List[str]) -> List[str]:
+        """
+        Filter lines beginning with 'Text=', if multiple such lines are
+        following each other, concatenate them.
+        """
+        matches = [SENTENCE_RE.match(line) for line in lines]
+        match_groups = [list(ms) for is_m, ms in itertools.groupby(matches, key=lambda m: m is not None) if is_m]
+        text_groups = [[m.group(1) for m in group] for group in match_groups]
+        return [MULTILINE_SPLIT_CHAR.join(group).replace("\\r", "\r") for group in text_groups]
+
     @classmethod
     def from_lines(cls, lines: List[str]) -> 'Document':
         non_comments = [line for line in lines if not COMMENT_RE.match(line)]
         token_data = [line for line in non_comments if not SUB_TOKEN_RE.match(line)]
-        sentence_strs = _filter_sentences(lines)
+        sentence_strs = cls._filter_sentences(lines)
 
         layer_definitions = LayerDefinition.from_lines(lines)
 
@@ -511,19 +609,17 @@ class Document:
         sentences = {idx: Sentence(text=s) for idx, s in enumerate(sentence_strs)}
         row: Dict
         for row in rows:
-            # consume the first three columns of each line
-            row_token = _read_token(row)
-
+            row_token = RowToken.from_row(row)
             sent_idx = row_token.sentence_idx - 1
             sentences[sent_idx] = sentences[sent_idx].add_token(token=row_token)
             for layer_def in layer_definitions:
                 annotation_dicts = layer_def.read_annotation_row(row=row, row_token=row_token)
                 annotation_rows[layer_def].extend(annotation_dicts)
 
-        annotation_to_id = {}
+        id2annotation = {}
         layers = [
             layer_def.build_layer(
-                rows=annotation_rows[layer_def], annotation_to_id=annotation_to_id, sentences=sentences
+                rows=annotation_rows[layer_def], id2annotation=id2annotation, sentences=sentences
             )
             for layer_def in layer_definitions
         ]
@@ -533,97 +629,3 @@ class Document:
     def from_file(cls, path: str) -> 'Document':
         with open(path, 'r', encoding='utf-8') as f:
             return cls.from_lines(f.readlines())
-
-
-def _write_annotation_features(annotation: Annotation, id: Optional[str] = None) -> List[str]:
-    result = [_escape(v) if v is not None else "*" for v in annotation.values]
-    if id is not None:
-        result = [f"{entry}[{id}]" for entry in result]
-    return result
-
-
-def _annotation_type(layer_name: str, field_name: str) -> str:
-    return '|'.join([layer_name, field_name])
-
-
-def _unescape(text: str) -> str:
-    for s in RESERVED_STRS:
-        text = text.replace('\\' + s, s)
-    return text
-
-
-def _escape(text: str) -> str:
-    for s in RESERVED_STRS:
-        text = text.replace(s, '\\' + s)
-    return text
-
-
-def _read_relation_source_and_target_idx(base_value: str, default_target_idx: str) -> Tuple[str, str]:
-    match = RELATION_SOURCE_RE.match(base_value)
-    if not match:
-        raise ValueError(f"Could not parse relation source from {base_value}")
-
-    if match.group(2) is None or match.group(2) == "0":
-        source_idx = match.group(1)
-    else:
-        source_idx = match.group(2)
-    if match.group(3) is None or match.group(3) == "0":
-        target_idx = default_target_idx
-    else:
-        target_idx = match.group(3)
-    return source_idx, target_idx
-
-
-def _read_token(row: Dict) -> RowToken:
-    """
-    Construct a Token from the row object using the sentence from doc.
-    This converts the first three columns of the TSV, e.g.:
-        "2-3    13-20    example"
-    becomes:
-        Token(Sentence(idx=2), idx=3, start=13, end=20, text='example')
-    """
-
-    def intsplit(s: str):
-        return [int(s) for s in s.split('-')]
-
-    sent_idx, tok_idx = intsplit(row['sent_tok_idx'])
-    start, end = intsplit(row['offsets'])
-    text = _unescape(row['token'])
-    return RowToken(sentence_idx=sent_idx, idx=tok_idx, start=start, end=end, text=text)
-
-
-def _read_annotation_field(row: Dict, layer: LayerDefinition, field: str) -> List[str]:
-    col_name = _annotation_type(layer.name, field)
-    return row[col_name].split('|') if row[col_name] else []
-
-
-def _read_label_and_id(field: str) -> Tuple[str, int]:
-    """
-    Reads a Webanno TSV field value, returning a label and an id.
-    Returns an empty label for placeholder values '_', '*'
-    Examples:
-        "OBJ[6]" -> ("OBJ", 6)
-        "OBJ"    -> ("OBJ", -1)
-        "_"      -> ("", None)
-        "*[6]"   -> ("", 6)
-    """
-
-    def handle_label(s: str):
-        return '' if FIELD_EMPTY_RE.match(s) else _unescape(s)
-
-    match = FIELD_WITH_ID_RE.match(field)
-    if match:
-        return handle_label(match.group(1)), int(match.group(2))
-    else:
-        return handle_label(field), NO_LABEL_ID
-
-
-def _filter_sentences(lines: List[str]) -> List[str]:
-    """
-    Filter lines beginning with 'Text=', if multiple such lines are
-    following each other, concatenate them.
-    """
-    matches = [SENTENCE_RE.match(line) for line in lines]
-    match_groups = [list(ms) for is_m, ms in itertools.groupby(matches, key=lambda m: m is not None) if is_m]
-    text_groups = [[m.group(1) for m in group] for group in match_groups]
-    return [MULTILINE_SPLIT_CHAR.join(group).replace("\\r", "\r") for group in text_groups]
