@@ -1,0 +1,20 @@
+#FORMAT=WebAnno TSV 3.3
+#T_SP=pos|pos
+#T_SP=lemma|lemma
+#T_RL=relations|label|trigger|BT_pos
+
+
+#Text=This is a sentence.
+1-1	0-4	This	_	_	_	_	_
+1-2	5-7	is	_	be	_	_	_
+1-3	8-9	a	article[1]|DT[2]	_	_	_	_
+1-4	10-18	sentence	DT[2]	_	_	_	_
+1-5	18-19	.	_	_	_	_	_
+
+#Text=This is 
+#Text=another sentence.
+2-1	21-25	This	_	_	_	_	_
+2-2	26-28	is	_	be	_	_	_
+2-3	30-37	another	DT	_	same\_type	another	1-3[2_0]
+2-4	38-46	sentence	_	_	_	_	_
+2-5	46-47	.	_	_	_	_	_
