@@ -11,10 +11,10 @@ The following features are supported:
 * Span annotations over multiple tokens and sentences
 * Multiple Annotations per field (stacked annotations)
 * Disambiguation IDs (here called `label_id`)
+* Relations
 
 The following is __not supported__:
 
-* Relations
 * Chain annotations
 * Sub-Token annotations (ignored on reading)
 
@@ -29,26 +29,44 @@ pip install git+https://github.com/neuged/webanno_tsv
 
 To construct a Document with annotations you could do:
 
-```py
-from webanno_tsv import Document, AnnotationPart, SpanLayer
-from dataclasses import replace
+```python
+from webanno_tsv import Document, Layer, SpanLayerDefinition, RelationLayerDefinition, Sentence, Token, SpanAnnotation, RelationAnnotation
 
-sentences = [
-    ['First', 'sentence'],
-    ['Second', 'sentence']
-]
-doc = Document.from_token_lists(sentences)
+# create a sentence with two tokens
+sent1 = Sentence(text="First sentence").add_token(Token(start=0, end=5), expected_text="First").add_token(Token(start=6, end=14), expected_text="sentence")
+sent2 = Sentence(text="Second sentence").add_token(Token(start=15, end=21), expected_text="Second").add_token(Token(start=22, end=30), expected_text="sentence")
 
-layer_defs = [
-    SpanLayer('Layer1', ('Field1',)),
-    SpanLayer('Layer2', ('Field2', 'Field3')),
+# create a new document with three layers:
+layers = [
+    Layer(SpanLayerDefinition(name='Layer1', features=('Field1',))),
+    Layer(SpanLayerDefinition(name='Layer2', features=('Field2', 'Field3'))),
+    Layer(RelationLayerDefinition(name='Layer3', features=('Field4', ), base='Layer2')),
 ]
-annotations = [
-    AnnotationPart(tokens=doc.tokens[1:2], layer=layer_defs[0], field='Field1', label='ABC'),
-    AnnotationPart(tokens=doc.tokens[1:3], layer=layer_defs[1], field='Field3', label='XYZ', label_id=1)
-]
-doc = replace(doc, annotation_parts=annotations, layer_defs=layer_defs)
-doc.tsv()
+doc = Document(layers)
+
+# add the sentences to the document
+doc = doc.add_sentence(sent1).add_sentence(sent2)
+
+print(doc.text)
+# Prints:
+# First sentence
+# Second sentence
+
+# add span annotations to the document
+# to Layer1
+span1 = SpanAnnotation(values=('ABC',), tokens=doc.tokens[1:2])
+doc = doc.add_annotation("Layer1", span1)
+span2 = SpanAnnotation(values=('DEF',), tokens=doc.tokens[3:4])
+doc = doc.add_annotation("Layer1", span2)
+# to Layer2
+span3 = SpanAnnotation(values=(None, 'UVW'), tokens=doc.tokens[0:1])
+doc = doc.add_annotation("Layer2", span3)
+span4 = SpanAnnotation(values=(None, 'XYZ'), tokens=doc.tokens[1:3])
+doc = doc.add_annotation("Layer2", span4)
+
+# add a relation annotation to the document
+rel = RelationAnnotation(values=('R',), source=span3, target=span4)
+doc = doc.add_annotation("Layer3", rel)
 ```
 
 The call to `doc.tsv()` then returns a string:
@@ -57,49 +75,70 @@ The call to `doc.tsv()` then returns a string:
 #FORMAT=WebAnno TSV 3.3
 #T_SP=Layer1|Field1
 #T_SP=Layer2|Field2|Field3
+#T_RL=Layer3|Field4|BT_Layer2
 
 
 #Text=First sentence
-1-1	0-5	First	_	_	_
-1-2	6-14	sentence	ABC	*[1]	XYZ[1]
+1-1	0-5	First	_	*	UVW	_	_
+1-2	6-14	sentence	ABC	*[1]	XYZ[1]	_	_
 
 #Text=Second sentence
-2-1	15-21	Second	_	*[1]	XYZ[1]
-2-2	22-30	sentence	_	_	_
+2-1	15-21	Second	_	*[1]	XYZ[1]	R	1-1[0_1]
+2-2	22-30	sentence	DEF	_	_	_	_
+
 ```
 
 Supposing that you have a file with the output above as input you could do:
 
-```py
-from webanno_tsv import webanno_tsv_read_file, Document
+```python
+from webanno_tsv import Document
 
-doc = webanno_tsv_read_file('/tmp/input.tsv')
+doc = Document.from_file('/tmp/input.tsv')
 
-for token in doc.tokens:
-    if token.text == 'sentence':
-        print(token.sentence_idx, token.idx)
+print(doc.text)
+# Prints:
+# First sentence
+# Second sentence
+
+for sent in doc.sentences:
+    print(sent)
 
 # Prints:
-# 1 2
-# 2 2
+# Sentence(text='First sentence', tokens=(Token(start=0, end=5), Token(start=6, end=14)))
+# Sentence(text='Second sentence', tokens=(Token(start=15, end=21), Token(start=22, end=30)))
 
-for annotation in doc.match_annotations(layer_name='Layer2'):
-    print(annotation.layer, annotation.field, annotation.label)
+for tok in doc.tokens:
+    print(tok)
+    
+# Prints:
+# Token(start=0, end=5)
+# Token(start=6, end=14)
+# Token(start=15, end=21)
+# Token(start=22, end=30)
+
+for annotation in doc.layers['Layer2']:
+    print(annotation)
 
 # Prints:
 # Layer2 Field3 XYZ
 
-for annotation in doc.match_annotations(sentence=doc.sentences[0]):
-    print(annotation.layer, annotation.field, annotation.label)
+print(set(doc.layers))
 
 # Prints:
-# Layer1 Field1 ABC
-# Layer2 Field3 XYZ
+# {'Layer1', 'Layer2', 'Layer3'}
 
-# Some lookup functions for convenience are on the Document instance
-doc.token_sentence(token[0])
-doc.sentence_tokens(doc.sentence[0])
-doc.annotation_sentences(doc.annotation_parts[0])
+for ann in doc.layers["Layer2"]:
+    print(ann)
+    
+# Prints:
+# SpanAnnotation(values=(None, 'UVW'), tokens=(Token(start=0, end=5),))
+# SpanAnnotation(values=(None, 'XYZ'), tokens=(Token(start=6, end=14), Token(start=15, end=21)))
+
+for ann in doc.layers["Layer3"]:
+    print(ann)
+
+# Prints:
+# RelationAnnotation(values=('R',), source=SpanAnnotation(values=(None, 'UVW'), tokens=(Token(start=0, end=5),)), target=SpanAnnotation(values=(None, 'XYZ'), tokens=(Token(start=6, end=14), Token(start=15, end=21))))
 ```
 
 __Possible Gotcha__: The classes in this library are read-only dataclasses ([dataclasses with `frozen=True`](https://docs.python.org/3/library/dataclasses.html#dataclasses.dataclass)).
@@ -109,8 +148,8 @@ This means that their fields are not settable. You can create new versions howev
 ```py
 from dataclasses import replace
 
-t1 = Token(sentence_idx=1, idx=0, start=0, end=3, text='Foo')
-t2 = replace(t1, text='Bar')
+t1 = Token(start=0, end=4)
+t2 = replace(t1, start=1)
 ```
 
 
