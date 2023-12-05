@@ -4,7 +4,7 @@ import itertools
 import re
 from collections import defaultdict
 from copy import copy
-from dataclasses import dataclass, replace, field
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Sequence, Tuple, Any, Union, Iterator
 
 NO_LABEL_ID = -1
@@ -194,10 +194,10 @@ class Layer(abc.ABC):
     def __len__(self):
         return len(self.annotations)
 
-    def sentence_annotation_lines(
+    def annotation_lines_per_sentence(
             self, sentences: Sequence[Sentence], id2annotation: Dict[Tuple[str, str], Annotation]
     ) -> Iterator[List[List[str]]]:
-        yield from self.definition.sentence_annotation_lines(self.annotations, sentences, id2annotation)
+        yield from self.definition.annotation_lines_per_sentence(self.annotations, sentences, id2annotation)
 
 
 @dataclass(frozen=True, order=True)
@@ -233,7 +233,7 @@ class LayerDefinition(abc.ABC):
                     yield layer_def
 
     @abc.abstractmethod
-    def sentence_annotation_lines(
+    def annotation_lines_per_sentence(
         self,
         annotations: Sequence[Annotation],
         sentences: Sequence[Sentence],
@@ -296,10 +296,10 @@ class SpanLayerDefinition(LayerDefinition):
             return SpanLayerDefinition(name=name, features=features)
 
     def as_header(self) -> str:
-        name = self.name + '|' + '|'.join(self.fields)
+        name = '|'.join((self.name,) + self.fields)
         return f'#T_SP={name}'
 
-    def sentence_annotation_lines(
+    def annotation_lines_per_sentence(
         self,
         annotations: Sequence[SpanAnnotation],
         sentences: Sequence[Sentence],
@@ -343,7 +343,7 @@ class SpanLayerDefinition(LayerDefinition):
             yield sentence_rows
 
     @staticmethod
-    def _read_label_and_id(field: str, default_id: str) -> Tuple[Optional[str], Optional[str]]:
+    def read_label_and_id(field_name: str, default_id: str) -> Tuple[Optional[str], Optional[str]]:
         """
         Reads a Webanno TSV field value, returning a label and an id.
         Returns an empty label for placeholder values '_', '*'
@@ -357,11 +357,11 @@ class SpanLayerDefinition(LayerDefinition):
         def handle_label(s: str):
             return None if FIELD_EMPTY_RE.match(s) else _unescape(s)
 
-        match = FIELD_WITH_ID_RE.match(field)
+        match = FIELD_WITH_ID_RE.match(field_name)
         if match:
             return handle_label(match.group(1)), match.group(2)
         else:
-            value = handle_label(field)
+            value = handle_label(field_name)
             if value is None:
                 return None, None
             else:
@@ -379,7 +379,7 @@ class SpanLayerDefinition(LayerDefinition):
             lid = None
             d_without_id = {}
             for k, v in annotation_row.data.items():
-                label, current_lid = self._read_label_and_id(field=v, default_id=annotation_row.idx)
+                label, current_lid = self.read_label_and_id(field_name=v, default_id=annotation_row.idx)
                 if lid is not None and current_lid != lid:
                     raise ValueError(f"Found multiple labels for the same annotation: {annotation_row.data}")
                 lid = current_lid
@@ -430,10 +430,10 @@ class RelationLayerDefinition(LayerDefinition):
             )
 
     def as_header(self) -> str:
-        name = '|'.join((self.name,) + self.features + (self.base_field,))
+        name = '|'.join((self.name,) + self.fields)
         return f'#T_RL={name}'
 
-    def sentence_annotation_lines(
+    def annotation_lines_per_sentence(
         self,
         annotations: Sequence[RelationAnnotation],
         sentences: Sequence[Sentence],
@@ -474,7 +474,7 @@ class RelationLayerDefinition(LayerDefinition):
             yield sentence_rows
 
     @staticmethod
-    def _read_relation_source_and_target_idx(base_value: str, default_target_idx: str) -> Tuple[str, str]:
+    def read_source_and_target_idx(base_value: str, default_target_idx: str) -> Tuple[str, str]:
         match = RELATION_SOURCE_RE.match(base_value)
         if not match:
             raise ValueError(f"Could not parse relation source from {base_value}")
@@ -502,7 +502,7 @@ class RelationLayerDefinition(LayerDefinition):
                     f"Row {annotation_row.data} does not contain all fields of layer {self.name} ({self.fields})"
                 )
             base_value = annotation_row.data[self.base_field]
-            source_idx, target_idx = self._read_relation_source_and_target_idx(
+            source_idx, target_idx = self.read_source_and_target_idx(
                 base_value=base_value, default_target_idx=annotation_row.idx
             )
             source: SpanAnnotation = id2annotation[(self.base, source_idx)]
@@ -570,15 +570,15 @@ class Document:
     def sentence_lines(self) -> List[str]:
 
         id2annotation = {}
-        generators = [layer.sentence_annotation_lines(self.sentences, id2annotation) for layer in self._layers]
+        generators = [layer.annotation_lines_per_sentence(self.sentences, id2annotation) for layer in self._layers]
         for sentence_idx, sentence_and_annotations in enumerate(zip(self.sentences, *generators)):
             sentence = sentence_and_annotations[0]
-            annotation_lines = sentence_and_annotations[1:]
+            annotation_items_per_layer = sentence_and_annotations[1:]
             token_items = sentence.annotation_lines(sentence_idx + 1)
             result = sentence.header_lines()
-            for token_and_layer_items in zip(token_items, *annotation_lines):
+            for token_and_annotation_items in zip(token_items, *annotation_items_per_layer):
                 # flatten the list of lists
-                row_items = [item for sublist in token_and_layer_items for item in sublist]
+                row_items = [item for sublist in token_and_annotation_items for item in sublist]
                 result.append('\t'.join(row_items))
             yield result
 

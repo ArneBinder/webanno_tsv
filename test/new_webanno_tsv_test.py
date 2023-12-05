@@ -142,7 +142,7 @@ class WebannoTsvCreateDocumentFromScratchWithAnnotations(unittest.TestCase):
     def test_layer_annotation_lines(self):
         self.assertEqual(3, len(self.doc.layers))
         id2annotation = {}
-        pos_annotation_lines = list(self.doc.layers["pos"].sentence_annotation_lines(
+        pos_annotation_lines = list(self.doc.layers["pos"].annotation_lines_per_sentence(
             sentences=self.doc.sentences, id2annotation=id2annotation
         ))
         self.assertEqual([
@@ -160,7 +160,7 @@ class WebannoTsvCreateDocumentFromScratchWithAnnotations(unittest.TestCase):
                 ['_'],
             ]
         ], pos_annotation_lines)
-        lemma_annotation_lines = list(self.doc.layers["lemma"].sentence_annotation_lines(
+        lemma_annotation_lines = list(self.doc.layers["lemma"].annotation_lines_per_sentence(
             sentences=self.doc.sentences, id2annotation=id2annotation
         ))
         self.assertEqual([
@@ -178,7 +178,7 @@ class WebannoTsvCreateDocumentFromScratchWithAnnotations(unittest.TestCase):
                 ['_'],
             ]
         ], lemma_annotation_lines)
-        relation_annotation_lines = list(self.doc.layers["relations"].sentence_annotation_lines(
+        relation_annotation_lines = list(self.doc.layers["relations"].annotation_lines_per_sentence(
             sentences=self.doc.sentences, id2annotation=id2annotation
         ))
         self.assertEqual([
