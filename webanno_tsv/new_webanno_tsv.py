@@ -26,7 +26,7 @@ HEADERS = ['#FORMAT=WebAnno TSV 3.3']
 TOKEN_FIELDNAMES = ['sent_tok_idx', 'offsets', 'token']
 
 # Strings that need to be escaped with a single backslash according to Webanno Appendix B
-RESERVED_STRS = ['\\', '[', ']', '|', '_', '->', ';', '\t', '\n', '*']
+RESERVED_STRS = ['\\', '[', ']', '|', '_', '->', ';', '\t', '\n', '*', '\r']
 
 # Multiline sentences are split on this character per Webanno Appendix B
 MULTILINE_SPLIT_CHAR = '\f'
@@ -626,4 +626,4 @@ def _filter_sentences(lines: List[str]) -> List[str]:
     matches = [SENTENCE_RE.match(line) for line in lines]
     match_groups = [list(ms) for is_m, ms in itertools.groupby(matches, key=lambda m: m is not None) if is_m]
     text_groups = [[m.group(1) for m in group] for group in match_groups]
-    return [MULTILINE_SPLIT_CHAR.join(group) for group in text_groups]
+    return [MULTILINE_SPLIT_CHAR.join(group).replace("\\r", "\r") for group in text_groups]
