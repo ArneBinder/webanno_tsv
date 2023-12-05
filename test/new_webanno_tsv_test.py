@@ -141,9 +141,9 @@ class WebannoTsvCreateDocumentFromScratchWithAnnotations(unittest.TestCase):
 
     def test_layer_annotation_lines(self):
         self.assertEqual(3, len(self.doc.layers))
-        annotation_to_id = {}
+        id2annotation = {}
         pos_annotation_lines = list(self.doc.layers["pos"].sentence_annotation_lines(
-            sentences=self.doc.sentences, annotation_to_id=annotation_to_id
+            sentences=self.doc.sentences, id2annotation=id2annotation
         ))
         self.assertEqual([
             [
@@ -161,7 +161,7 @@ class WebannoTsvCreateDocumentFromScratchWithAnnotations(unittest.TestCase):
             ]
         ], pos_annotation_lines)
         lemma_annotation_lines = list(self.doc.layers["lemma"].sentence_annotation_lines(
-            sentences=self.doc.sentences, annotation_to_id=annotation_to_id
+            sentences=self.doc.sentences, id2annotation=id2annotation
         ))
         self.assertEqual([
             [
@@ -179,7 +179,7 @@ class WebannoTsvCreateDocumentFromScratchWithAnnotations(unittest.TestCase):
             ]
         ], lemma_annotation_lines)
         relation_annotation_lines = list(self.doc.layers["relations"].sentence_annotation_lines(
-            sentences=self.doc.sentences, annotation_to_id=annotation_to_id
+            sentences=self.doc.sentences, id2annotation=id2annotation
         ))
         self.assertEqual([
             [
@@ -250,7 +250,9 @@ class WebannoTsvCreateDocumentFromScratchWithAnnotations(unittest.TestCase):
 class WebannoTsvFromFile(unittest.TestCase):
 
     def setUp(self) -> None:
-        with open(test_file('test_new.tsv'), 'r', encoding='utf-8') as f:
+        fn = test_file('test_new.tsv')
+        #fn = test_file('test_input.tsv')
+        with open(fn, 'r', encoding='utf-8') as f:
             self.lines = f.readlines()
         self.doc = Document.from_lines(self.lines)
 
