@@ -5,7 +5,7 @@ import re
 from collections import defaultdict
 from copy import copy
 from dataclasses import dataclass, replace, field
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Any, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Any, Union, Iterator
 
 NO_LABEL_ID = -1
 
@@ -163,7 +163,7 @@ class Layer(abc.ABC):
 
     def sentence_annotation_lines(
             self, sentences: Sequence[Sentence], annotation_to_id: Dict[Annotation, int]
-    ) -> List[List[str]]:
+    ) -> Iterator[List[List[str]]]:
         yield from self.definition.sentence_annotation_lines(self.annotations, sentences, annotation_to_id)
 
 
@@ -184,7 +184,7 @@ class LayerDefinition(abc.ABC):
         return self.features
 
     def as_columns(self) -> List[str]:
-        return [f'{self.name}|{field}' for field in self.fields]
+        return [f'{self.name}|{f}' for f in self.fields]
 
     @staticmethod
     def from_lines(lines: List[str]) -> List['LayerDefinition']:
@@ -193,10 +193,10 @@ class LayerDefinition(abc.ABC):
     @abc.abstractmethod
     def sentence_annotation_lines(
         self,
-        annotations: Sequence[SpanAnnotation],
+        annotations: Sequence[Annotation],
         sentences: Sequence[Sentence],
         annotation_to_id: Dict[Annotation, int],
-    ) -> List[List[str]]:
+    ) -> Iterator[List[List[str]]]:
         pass
 
     def build_layer(
@@ -210,7 +210,7 @@ class LayerDefinition(abc.ABC):
 
     def read_annotation_row(self, row: Dict, row_token: RowToken) -> List[RowAnnotation]:
         result = []
-        layer_values = {field: _read_annotation_field(row, self, field) for field in self.fields}
+        layer_values = {f: _read_annotation_field(row, self, f) for f in self.fields}
         for d in dict_of_lists_to_list_of_dicts(layer_values):
             filtered = {k: v for k, v in d.items() if v != '_'}
             if len(filtered) > 0:
@@ -249,7 +249,7 @@ class SpanLayerDefinition(LayerDefinition):
         annotations: Sequence[SpanAnnotation],
         sentences: Sequence[Sentence],
         annotation_to_id: Dict[Annotation, int],
-    ) -> List[List[str]]:
+    ) -> Iterator[List[List[str]]]:
         max_id = 1
         annotations_per_token = defaultdict(list)
         for annotation in annotations:
@@ -359,7 +359,7 @@ class RelationLayerDefinition(LayerDefinition):
         annotations: Sequence[RelationAnnotation],
         sentences: Sequence[Sentence],
         annotation_to_id: Dict[Annotation, int],
-    ) -> List[List[str]]:
+    ) -> Iterator[List[List[str]]]:
 
         token_to_indices = {}
         for sentence_idx, sentence in enumerate(sentences):
@@ -542,7 +542,7 @@ def _write_annotation_features(annotation: Annotation, id: Optional[str] = None)
     return result
 
 
-def _annotation_type(layer_name, field_name):
+def _annotation_type(layer_name: str, field_name: str) -> str:
     return '|'.join([layer_name, field_name])
 
 
@@ -627,4 +627,3 @@ def _filter_sentences(lines: List[str]) -> List[str]:
     match_groups = [list(ms) for is_m, ms in itertools.groupby(matches, key=lambda m: m is not None) if is_m]
     text_groups = [[m.group(1) for m in group] for group in match_groups]
     return [MULTILINE_SPLIT_CHAR.join(group) for group in text_groups]
-
