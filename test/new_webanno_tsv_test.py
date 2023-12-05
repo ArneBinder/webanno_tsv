@@ -2,23 +2,9 @@ import os
 import unittest
 
 from webanno_tsv.new_webanno_tsv import (
-    RowToken,
-    NO_LABEL_ID, SENTENCE_PADDING_CHAR, SpanLayerDefinition, Document, SpanLayer, RelationLayerDefinition, RelationLayer,
-    Sentence, Token, SpanAnnotation, RelationAnnotation,
+    SpanLayerDefinition, Document, RelationLayerDefinition,
+    Sentence, Token, SpanAnnotation, RelationAnnotation, Layer,
 )
-
-# These are used to override the actual layer names in the test files for brevity
-DEFAULT_LAYERS = [
-    SpanLayerDefinition('l1', ('pos',)),
-    SpanLayerDefinition('l2', ('lemma',)),
-    SpanLayerDefinition('l3', ('entity_id', 'named_entity'))
-]
-
-ACTUAL_DEFAULT_LAYER_NAMES = [
-    SpanLayerDefinition('de.tudarmstadt.ukp.dkpro.core.api.lexmorph.type.pos.POS', ('PosValue',)),
-    SpanLayerDefinition('de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Lemma', ('value',)),
-    SpanLayerDefinition('webanno.custom.LetterEntity', ('entity_id', 'value'))
-]
 
 
 def test_file(name):
@@ -29,9 +15,9 @@ class WebannoTsvCreateDocumentFromScratchEmpty(unittest.TestCase):
 
     def setUp(self) -> None:
         layers = [
-            SpanLayer(definition=SpanLayerDefinition('pos', ('pos',))),
-            SpanLayer(definition=SpanLayerDefinition('lemma', ('lemma',))),
-            RelationLayer(definition=RelationLayerDefinition('relations', ('label', 'trigger'), base='pos')),
+            Layer(definition=SpanLayerDefinition('pos', ('pos',))),
+            Layer(definition=SpanLayerDefinition('lemma', ('lemma',))),
+            Layer(definition=RelationLayerDefinition('relations', ('label', 'trigger'), base='pos')),
         ]
         self.doc = Document(layers)
 
@@ -46,9 +32,9 @@ class WebannoTsvCreateDocumentFromScratchWithAnnotations(unittest.TestCase):
 
     def setUp(self) -> None:
         layers = [
-            SpanLayer(definition=SpanLayerDefinition('pos', ('pos',))),
-            SpanLayer(definition=SpanLayerDefinition('lemma', ('lemma',))),
-            RelationLayer(definition=RelationLayerDefinition('relations', ('label', 'trigger'), base='pos')),
+            Layer(definition=SpanLayerDefinition('pos', ('pos',))),
+            Layer(definition=SpanLayerDefinition('lemma', ('lemma',))),
+            Layer(definition=RelationLayerDefinition('relations', ('label', 'trigger'), base='pos')),
         ]
         doc = Document(layers)
 
