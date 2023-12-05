@@ -209,21 +209,28 @@ class LayerDefinition(abc.ABC):
     def as_header(self) -> str:
         pass
 
-    def __len__(self) -> int:
-        return len(self.features)
-
     @property
     def fields(self) -> Tuple[str, ...]:
         return self.features
+
+    def __len__(self) -> int:
+        return len(self.fields)
 
     def as_columns(self) -> List[str]:
         return [f'{self.name}|{f}' for f in self.fields]
 
     @staticmethod
-    def from_lines(lines: List[str]) -> List['LayerDefinition']:
-        # TODO: do not change order of layers! This is not a problem at the moment, because relation layers
-        #  are always defined after all span layers, but this might be a problem when adding chain layers.
-        return SpanLayerDefinition.from_lines(lines) + RelationLayerDefinition.from_lines(lines)
+    @abc.abstractmethod
+    def from_line(line: str) -> Optional['LayerDefinition']:
+        pass
+
+    @classmethod
+    def from_lines(cls, lines: List[str]) -> Iterator['LayerDefinition']:
+        for line in lines:
+            for subclass in cls.__subclasses__():
+                layer_def = subclass.from_line(line)
+                if layer_def is not None:
+                    yield layer_def
 
     @abc.abstractmethod
     def sentence_annotation_lines(
@@ -281,15 +288,15 @@ class LayerDefinition(abc.ABC):
 class SpanLayerDefinition(LayerDefinition):
 
     @staticmethod
-    def from_lines(lines: List[str]) -> List['SpanLayerDefinition']:
-        span_matches = [SPAN_LAYER_DEF_RE.match(line) for line in lines]
-        layers = [
-            SpanLayerDefinition(name=m.group(1), features=tuple(m.group(2).split('|'))) for m in span_matches if m
-        ]
-        return layers
+    def from_line(line: str) -> Optional['SpanLayerDefinition']:
+        match = SPAN_LAYER_DEF_RE.match(line)
+        if match:
+            name = match.group(1)
+            features = tuple(match.group(2).split('|'))
+            return SpanLayerDefinition(name=name, features=features)
 
     def as_header(self) -> str:
-        name = self.name + '|' + '|'.join(self.features)
+        name = self.name + '|' + '|'.join(self.fields)
         return f'#T_SP={name}'
 
     def sentence_annotation_lines(
@@ -401,10 +408,6 @@ class SpanLayerDefinition(LayerDefinition):
 class RelationLayerDefinition(LayerDefinition):
     base: str
 
-    def __len__(self):
-        # +1 for the base field
-        return len(self.features) + 1
-
     @property
     def base_field(self) -> str:
         return f"BT_{self.base}"
@@ -414,20 +417,17 @@ class RelationLayerDefinition(LayerDefinition):
         return self.features + (self.base_field,)
 
     @staticmethod
-    def from_lines(lines: List[str]) -> List['RelationLayerDefinition']:
-        relation_matches = [RELATION_LAYER_DEF_RE.match(line) for line in lines]
-        layers = []
-        for m in relation_matches:
-            if m:
-                name = m.group(1)
-                features_and_base = m.group(2).split('|')
-                base_match = RELATION_BASE_LAYER.match(features_and_base[-1])
-                if not base_match:
-                    raise ValueError(f"Could not parse base layer from {features_and_base[-1]}")
-                layers.append(RelationLayerDefinition(
-                    name=name, features=tuple(features_and_base[:-1]), base=base_match.group(1))
-                )
-        return layers
+    def from_line(line: str) -> Optional['RelationLayerDefinition']:
+        match = RELATION_LAYER_DEF_RE.match(line)
+        if match:
+            name = match.group(1)
+            features_and_base = match.group(2).split('|')
+            base_match = RELATION_BASE_LAYER.match(features_and_base[-1])
+            if not base_match:
+                raise ValueError(f"Could not parse base layer from {features_and_base[-1]}")
+            return RelationLayerDefinition(
+                name=name, features=tuple(features_and_base[:-1]), base=base_match.group(1)
+            )
 
     def as_header(self) -> str:
         name = '|'.join((self.name,) + self.features + (self.base_field,))
@@ -606,7 +606,8 @@ class Document:
         token_data = [line for line in non_comments if not SUB_TOKEN_RE.match(line)]
         sentence_strs = cls._filter_sentences(lines)
 
-        layer_definitions = LayerDefinition.from_lines(lines)
+        # make a list because LayerDefinition.from_lines returns a generator
+        layer_definitions = list(LayerDefinition.from_lines(lines))
 
         columns = []
         for layer_def in layer_definitions:
@@ -636,4 +637,5 @@ class Document:
     @classmethod
     def from_file(cls, path: str) -> 'Document':
         with open(path, 'r', encoding='utf-8') as f:
-            return cls.from_lines(f.readlines())
+            lines = f.readlines()
+        return cls.from_lines(lines)
